@@ -52,7 +52,7 @@ struct ContentView: View {
                                 ForEach([5, 10, 15, 30, 60], id: \.self) { Text("\($0) 秒").tag($0) }
                             }.labelsHidden().pickerStyle(.menu)
                         }
-                        Text("默认关闭心跳：上下行实际显示值均未变化时不提交。KB/s 保留原精度，不合并低流量。关闭心跳时不使用定时过期标记，长按网速卡可核对最后发布的样本时间。")
+                        Text("默认关闭心跳：上下行实际显示值均未变化时不提交。不足 500 KB/s 保留原精度；高 KB/s 及 MB/s 自动防抖。关闭心跳时不使用定时过期标记，长按网速卡可核对最后发布的样本时间。")
                             .font(.footnote).foregroundStyle(.secondary)
                         Toggle("自适应更新节流", isOn: $monitor.adaptive)
                         Toggle("使用带时间戳的更新 API", isOn: $monitor.timestamped)
@@ -75,6 +75,38 @@ struct ContentView: View {
                             Button("立即重建灵动岛（不停止采样）") { monitor.renewNow() }.buttonStyle(.bordered)
                         }
                         Text(monitor.status).font(.subheadline)
+                        Divider()
+                        Text("刷新时长实验").font(.headline)
+                        Toggle("预定活动接力", isOn: $monitor.relayEnabled).disabled(monitor.running)
+                        if monitor.relayEnabled {
+                            setting("接力间隔") {
+                                Picker("接力间隔", selection: $monitor.relayInterval) {
+                                    ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
+                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
+                            }
+                            setting("预约数量") {
+                                Picker("预约数量", selection: $monitor.relaySlots) {
+                                    ForEach([1, 2, 3], id: \.self) { Text("\($0) 个").tag($0) }
+                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
+                            }
+                            Text("仅在前台预约，系统到时启动；必须提供提醒，可能出现提示音和短暂双活动。接力需要采样进程仍在运行。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if monitor.running {
+                                if monitor.pendingCount == 0 {
+                                    Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
+                                } else {
+                                    Button("取消剩余预约") { monitor.cancelRelay() }.buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                        setting("更新额度恢复实验") {
+                            Picker("更新额度恢复实验", selection: $monitor.recoveryPause) {
+                                Text("关闭").tag(0)
+                                ForEach([15, 30, 60], id: \.self) { Text("停 \($0) 秒").tag($0) }
+                            }.labelsHidden().pickerStyle(.menu)
+                        }
+                        Text("开启后，每个活动每发起约 90 次更新暂停提交指定时长，采样继续；是否能恢复额度尚待测试。暂停期间显示旧值。")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("后台诊断").font(.headline)
@@ -86,6 +118,12 @@ struct ContentView: View {
                         Text("有效采样：\(monitor.sampleCount) 次")
                         Text("相同显示值跳过检查：\(monitor.unchangedChecks) 次")
                         Text("最近发起显示值：\(monitor.lastPublishedValue)")
+                        Text("防抖抑制检查：\(monitor.suppressedCount) 次")
+                        Text("当前活动发起：\(monitor.activityAttempts) 次 · 内容观察：\(monitor.observedCount) 次")
+                        Text("最近内容观察：\(stamp(monitor.observedAt))")
+                        Text("预约接力：\(monitor.relayCount) 次 · 待启动 \(monitor.pendingCount) 个")
+                        Text(monitor.relayStatus)
+                        Text("冷却剩余：\(monitor.cooldownRemaining) 秒")
                         Text("更新调用返回：\(monitor.submitCount) 次")
                         Text("最近采样：\(stamp(monitor.lastSample))")
                         Text("最近提交返回：\(stamp(monitor.lastSubmit))")

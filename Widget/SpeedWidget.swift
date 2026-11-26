@@ -46,7 +46,13 @@ struct SpeedWidget: Widget {
         let stamp = state.sampledAt.formatted(.dateTime.hour().minute().second())
         let label = state.sampleNumber.map { "样本 #\($0)" } ?? "采样"
         let note = state.sampleNumber == 0 ? "等待首个有效样本" : "\(context.isStale ? "上次" : "")\(label) · \(stamp)"
-        return Text(note).font(.caption2).foregroundStyle(.secondary).contentTransition(.identity)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(note).contentTransition(.identity)
+            HStack(spacing: 4) {
+                Text("系统计时对照")
+                Text(context.attributes.startedAt, style: .timer).monospacedDigit()
+            }
+        }.font(.caption2).foregroundStyle(.secondary)
     }
 
     private func compact(_ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?, minimal: Bool = false) -> some View {
