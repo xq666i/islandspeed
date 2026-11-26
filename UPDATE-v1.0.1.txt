@@ -1,0 +1,17 @@
+IslandSpeed 后台刷新修复补丁 v1.0.1（实验版）
+
+将以下文件按相对路径覆盖到 GitHub 仓库根目录：
+App/SpeedMonitor.swift
+App/IslandSpeedApp.swift
+Widget/SpeedWidget.swift
+build.sh
+新增文件 App/quiet.wav（必须保留原 App/silence.wav）。
+其余文件保持原样；原有 project.yml 的 audio 后台模式与 Widget 配置不变。
+
+提交后 Actions -> Build unsigned IPA，下载本次构建的 artifact 并解压 IPA。自签时保留 Widget 扩展及 UIBackgroundModes: audio。
+停止旧版活动，安装新版，打开 App，保持实验性后台保活开启，先不要开启低音量音频测试。点击开启，确认音频播放中、有效采样计数不断增加。打开 Safari 进行下载或浏览，约 60 秒后返回 App，查看后台诊断。长按灵动岛可见采样时间。
+若仍冻结，可停止监控、打开低音量音频测试、再次开启监控并重复测试。低音量音频不是完全无声，可能听见；可能增加耗电或影响其他音频。用户可关闭后台保活。
+
+诊断：若离开约 60 秒只新增少量采样、或返回时距离上次采样很久，后台运行可能被挂起；若后台采样持续而更新调用不返回，可能是 ActivityKit 提交停滞；若两者持续而灵动岛时间不变，可能是系统渲染/更新节流。回前台的计数可能包含少量前台采样，结合时间与循环中断判断。
+
+已在 Linux 上完成 Swift 语法解析、shell 语法检查与音频文件检查。未使用 iOS SDK 编译、未进行 iOS 27 真机测试，不能保证后台持续运行或每两秒渲染。新版仍是实验性修复而非永久保活方案。

@@ -23,7 +23,7 @@ struct SpeedWidget: Widget {
                     detailed("上传", "arrow.up", context.state.up, .cyan, context.isStale)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(context.isStale ? "更新中断 · 打开 App 恢复" : "灵动网速 · 实时流量")
+                    Text(context.isStale ? "数据过期 · 打开 App 检查" : "采样 " + context.state.sampledAt.formatted(.dateTime.hour().minute().second()))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             } compactLeading: {

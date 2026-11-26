@@ -9,6 +9,7 @@ APP=build/Build/Products/Release-iphoneos/IslandSpeed.app
 test -f "$APP/IslandSpeed"
 test -f "$APP/PlugIns/IslandSpeedWidget.appex/IslandSpeedWidget"
 test -f "$APP/silence.wav"
+test -f "$APP/quiet.wav"
 mkdir -p dist
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
