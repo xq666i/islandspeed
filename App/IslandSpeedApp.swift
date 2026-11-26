@@ -61,7 +61,7 @@ struct ContentView: View {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
                                 }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
                             }
-                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会尝试重新补满。")
+                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会取消原预约，以新活动启动时间为基准重新安排4次。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
                                 Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
@@ -78,7 +78,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("接力实验结果").font(.headline)
                         Text("本轮成功预约峰值：\(monitor.reservationPeak) 个").font(.subheadline.weight(.semibold))
-                        Text("当前待接力：\(monitor.pendingCount)/4 个 · 自动接力成功：\(monitor.relayCount) 次")
+                        Text("当前待接力：\(monitor.pendingCount)/4 个 · 累计接力：\(monitor.relayCount + monitor.renewCount) 次")
                         Text("最近探测：\(monitor.reservationProbe)")
                         Text("最近预约失败：\(monitor.reservationFailure)").textSelection(.enabled)
                         Divider()
@@ -93,7 +93,8 @@ struct ContentView: View {
                         Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次 · 失败 \(monitor.buttonFailures) 次")
                         Text("执行阶段：\(monitor.buttonStage)")
                         Text("当前活动 ID：\(monitor.currentActivityID)").textSelection(.enabled)
-                        Text("扩展侧 Intent 信号：\(monitor.buttonFallbackSignals) 次（正常应为0）")
+                        Text("Intent 路由：\(monitor.intentRoutingMode)")
+                        Text("扩展侧 Intent 信号：\(monitor.buttonFallbackSignals) 次（转发尝试，非授权路径）")
                         Text(monitor.buttonResult)
                         Button("复制实验诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                         DisclosureGroup("接力事件记录（最近 \(monitor.relayEvents.count) 条）") {

@@ -41,6 +41,12 @@ import UIKit
     @Published private(set) var buttonSuccesses = 0
     @Published private(set) var buttonFailures = 0
     @Published private(set) var buttonFallbackSignals = 0
+    var intentRoutingMode: String {
+        #if ISLANDSPEED_MAIN_TARGET_ROUTING
+        if #available(iOS 27.0, *) { return "iOS 27 显式主程序路由（.main）" }
+        #endif
+        return "兼容路由（未启用 iOS 27 .main）"
+    }
     @Published private(set) var buttonStage = "尚未执行"
     @Published private(set) var buttonResult = "尚未点击"
     @Published private(set) var relayEvents: [String] = UserDefaults.standard.stringArray(forKey: "IslandSpeed.relayDiagnostics.v118") ?? []
@@ -122,7 +128,21 @@ import UIKit
     }
     private func buttonFallbackReceived() {
         buttonFallbackSignals += 1
-        recordRelay("按钮 Intent 扩展侧信号：系统未按预期在主程序执行（仅诊断，未发起接力）")
+        recordRelay("按钮 Intent 扩展侧信号：主程序收到转发；普通后台尝试，不继承 Intent 授权")
+        guard running, let current = activity else {
+            buttonAttempts += 1; buttonFailures += 1
+            buttonStage = "扩展转发：无采样会话"
+            buttonResult = "扩展转发已收到，但没有运行中的活动"
+            recordRelay(buttonResult)
+            return
+        }
+        let id = current.id
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.renewFromIntent(activityID: id, route: "扩展转发（普通后台）") { attributes, content in
+                try Activity<SpeedAttributes>.request(attributes: attributes, content: content, pushType: nil)
+            }
+        }
     }
     func requestPermission() {
         switch location.authorization {
@@ -336,12 +356,12 @@ import UIKit
     }
     // The system invokes LiveActivityIntent in the app process. Count entry
     // before any guard, including cold launch or a stale button.
-    func renewFromIntent(activityID: String, request: @escaping @MainActor (SpeedAttributes, ActivityContent<SpeedAttributes.ContentState>) throws -> Activity<SpeedAttributes>) async -> Bool {
+    func renewFromIntent(activityID: String, route: String, request: @escaping @MainActor (SpeedAttributes, ActivityContent<SpeedAttributes.ContentState>) throws -> Activity<SpeedAttributes>) async -> Bool {
         let token = sessionID
         buttonAttempts += 1
-        buttonStage = "Intent 已进入主程序"
+        buttonStage = route
         buttonResult = "已收到按钮请求：\(activityID)；当前：\(activity?.id ?? "无")"
-        recordRelay("Intent 入口 pid=\(ProcessInfo.processInfo.processIdentifier)：\(buttonResult)")
+        recordRelay("按钮入口 [\(route)] pid=\(ProcessInfo.processInfo.processIdentifier)：\(buttonResult)")
         guard running, let current = activity else {
             buttonFailures += 1; buttonStage = "监控进程没有运行"
             buttonResult = "未重建：没有运行中的采样会话，请打开 App。"
@@ -353,14 +373,14 @@ import UIKit
             recordRelay(buttonResult); return false
         }
         let successesBefore = buttonSuccesses
-        let success = await renew(source: "按钮", intent: true, request: request)
+        let success = await renew(source: "按钮", intent: true, request: request, authorizedIntentPath: route == "系统 Intent 主程序")
         if sessionID == token {
             if !success && buttonSuccesses == successesBefore {
                 buttonFailures += 1
                 if buttonResult.hasPrefix("已收到") { buttonStage = "接力未完成"; buttonResult = renewStatus }
             } else if success {
-                buttonStage = "新活动已绑定；预约处理结束"
-                buttonResult = "新活动创建成功；剩余预约 \(pendingCount)/4 个；\(relayStatus)"
+                buttonStage = relayEnabled && pendingCount < reservationProbeLimit ? "接力成功，预约未补满" : "新活动已绑定；预约重置结束"
+                buttonResult = "新活动创建成功；累计接力 \(renewCount + relayCount)；预约 \(pendingCount)/4 个；下次 \(scheduled.first?.date.formatted(.dateTime.hour().minute().second()) ?? "无")；\(relayStatus)"
             }
             recordRelay("按钮结果：\(buttonResult)")
         }
@@ -407,7 +427,7 @@ import UIKit
         default: return false
         }
     }
-    private func renew(source: String, intent: Bool, expansion: Bool = false, request: (@MainActor (SpeedAttributes, ActivityContent<SpeedAttributes.ContentState>) throws -> Activity<SpeedAttributes>)? = nil) async -> Bool {
+    private func renew(source: String, intent: Bool, expansion: Bool = false, request: (@MainActor (SpeedAttributes, ActivityContent<SpeedAttributes.ContentState>) throws -> Activity<SpeedAttributes>)? = nil, authorizedIntentPath: Bool = true) async -> Bool {
         guard running, renewTask == nil, retiring == nil, let old = activity,
               intent || expansion || UIApplication.shared.applicationState == .active else {
             if intent { renewStatus = "按钮接力跳过：监控不可用、已有接力执行或不具备执行条件" }
@@ -423,49 +443,35 @@ import UIKit
         let token = sessionID
         retiring = old // also guards against concurrent automatic/manual promotion
         defer { if sessionID == token { retiring = nil } }
+        // Only a system-authorized Intent or the foreground should consume
+        // appointments before a new Activity has actually been created.
+        let canPreclear = (!intent && !expansion && UIApplication.shared.applicationState == .active)
+            || (intent && authorizedIntentPath)
+        let originalDates = scheduled.map { $0.date }
+        var queueCleared = false
         var valid = false
         var displayRates: (down: Double, up: Double) = (0, 0)
         func requestNew() throws -> Activity<SpeedAttributes> {
             valid = lastValidInstant.map { $0.duration(to: .now) < .seconds(2) } == true && !samples.isEmpty
             displayRates = rates(valid: valid)
             let attributes = SpeedAttributes(startedAt: Date(), expandRelay: expandRelay)
-            let snapshot = content(valid: valid, rates: displayRates)
+            // The new ID starts a fresh cycle. Never put old appointment dates
+            // or the old cumulative relay count into its initial content.
+            let state = SpeedAttributes.ContentState(down: displayRates.down, up: displayRates.up,
+                sampledAt: valid ? (lastSample ?? Date()) : Date(), sampleNumber: valid ? sampleCount : 0,
+                pendingRelays: 0, totalRelays: renewCount + relayCount + 1, nextRelay: nil)
+            let snapshot = ActivityContent(state: state, staleDate: nil, relevanceScore: Double(relevance))
             if intent { buttonStage = "调用 Activity.request"; recordRelay("按钮：开始创建新活动") }
             if let request { return try request(attributes, snapshot) }
             return try Activity.request(attributes: attributes, content: snapshot, pushType: nil)
         }
         do {
-            // The observed device permits four pending reservations. If all four
-            // are occupied, free one slot before making the immediate request.
-            // Never terminate the current activity just to create room.
-            if !expansion && scheduled.count >= reservationProbeLimit,
-               let index = scheduled.lastIndex(where: { isPending($0.activity) }) {
-                let freed = scheduled.remove(at: index)
-                pendingCount = scheduled.count
-                if intent { buttonStage = "4个预约已满，先释放最远预约" }
-                recordRelay("\(source)：预约已满，先释放最远预约 \(freed.activity.id)")
-                extraRetiring.append(freed.activity)
-                await freed.activity.end(nil, dismissalPolicy: .immediate)
-                guard running, sessionID == token else { return false }
-                extraRetiring.removeAll { $0.id == freed.activity.id }
+            if canPreclear {
+                if intent { buttonStage = "取消原预约队列" }
+                queueCleared = true
+                guard await clearQueueForRenew(token: token, source: source) else { return false }
             }
-            let new: Activity<SpeedAttributes>
-            do { new = try requestNew() }
-            catch {
-                // Never sacrifice the current activity. Free only the farthest
-                // still-pending reservation, and only after a genuine limit error.
-                guard !expansion, isLimit(error),
-                      let index = scheduled.lastIndex(where: { isPending($0.activity) }) else { throw error }
-                let freed = scheduled.remove(at: index)
-                pendingCount = scheduled.count
-                if intent { buttonStage = "额度满，释放最远预约" }
-                recordRelay("\(source)创建受数量限制，释放最远预约；\(errorDetail(error))")
-                extraRetiring.append(freed.activity)
-                await freed.activity.end(nil, dismissalPolicy: .immediate)
-                guard running, sessionID == token else { return false }
-                extraRetiring.removeAll { $0.id == freed.activity.id }
-                new = try requestNew()
-            }
+            let new = try requestNew()
             guard running, sessionID == token else { await new.end(nil, dismissalPolicy: .immediate); return false }
             updateTask?.cancel(); updateTask = nil; inFlightSince = nil
             activity = new; activityStarted = .now; activityAge = 0; activityState = "active"
@@ -481,12 +487,28 @@ import UIKit
                 recordRelay("按钮创建成功并绑定：\(buttonResult)")
             }
             recordRelay("\(source)接力成功：\(old.id) → \(new.id)")
+            // Keep the new activity bound even if queue management fails.
+            // Non-authorized experimental routes only reach here after they
+            // actually succeeded in creating a new Activity.
+            if !queueCleared {
+                guard await clearQueueForRenew(token: token, source: source) else { return false }
+            }
             await old.end(nil, dismissalPolicy: .immediate)
             guard running, sessionID == token else { return false }
-            if relayEnabled && !expansion {
-                if intent { buttonStage = "旧活动已结束，正在补充预约"; recordRelay("按钮：旧活动清理返回") }
-                await replanAndFill(intent: intent, token: token)
+            if relayEnabled {
+                if intent { buttonStage = "旧活动已结束，重新预约4次" }
+                let anchor = new.attributes.startedAt
+                recordRelay("\(source)重新规划：以新活动启动时间 \(anchor.formatted(.dateTime.hour().minute().second())) 为基准，间隔 \(relayInterval)s")
+                fillReservations(intent: intent || expansion, anchor: anchor)
+            } else {
+                relayStatus = "自动预约已关闭"
             }
+            // Queue/count metadata is a meaningful change even if rates have
+            // not moved. Publish it at the next possible opportunity rather
+            // than waiting up to the configured 15-second sampling interval.
+            lastAttempt = nil; lastCheck = nil
+            controlUpdates()
+            recordRelay("\(source)接力队列处理结束：累计接力 \(renewCount + relayCount)，预约 \(pendingCount)/4；下次 \(scheduled.first?.date.formatted(.dateTime.hour().minute().second()) ?? "无")")
             return true
         } catch {
             if sessionID == token {
@@ -494,7 +516,12 @@ import UIKit
                 renewStatus = "\(source)接力失败，保留原活动：\(error.localizedDescription)"
                 if intent { buttonStage = "创建失败，保留旧活动"; buttonResult = errorDetail(error) }
                 recordRelay("\(source)接力失败：\(errorDetail(error))")
-                if !expansion && relayEnabled { fillReservations(intent: intent) }
+                if queueCleared && relayEnabled {
+                    recordRelay("创建失败：尝试恢复原有预约时间并补足，保留当前活动")
+                    fillReservations(intent: intent, anchor: Date(), preserving: originalDates)
+                    lastAttempt = nil; lastCheck = nil
+                    controlUpdates()
+                }
             }
             return false
         }
@@ -537,26 +564,28 @@ import UIKit
         #endif
         throw NSError(domain: "IslandSpeed", code: 26, userInfo: [NSLocalizedDescriptionKey: "当前系统或 SDK 不支持预约活动"])
     }
-    private func fillReservations(intent: Bool = false) {
+    private func fillReservations(intent: Bool = false, anchor: Date? = nil, preserving: [Date] = []) {
         guard running, relayEnabled, intent || UIApplication.shared.applicationState == .active else {
             recordRelay("预约探测跳过：监控/预约未启用，或不具备后台预约调用条件")
             return
         }
         scheduled.removeAll { $0.activity.activityState == .ended || $0.activity.activityState == .dismissed }
         pendingCount = scheduled.count
-        let origin = max(Date(), scheduled.last?.date ?? Date())
+        let now = Date()
+        let origin = anchor ?? max(now, scheduled.last?.date ?? now)
         let initial = scheduled.count
+        let dates = RelaySchedule.dates(anchor: origin, interval: relayInterval,
+            count: reservationProbeLimit - initial, now: now, preserving: preserving)
+        reservationFailure = "本轮尚无失败记录"
         reservationProbe = "探测中（原有 \(initial) 个）"
         recordRelay("预约探测开始：原有 \(initial) 个；来源=\(intent ? "按钮 Intent" : "前台")")
-        var i = 1
-        while scheduled.count < reservationProbeLimit && i <= reservationProbeLimit {
-            let date = origin.addingTimeInterval(Double(i * relayInterval))
+        for (offset, date) in dates.enumerated() {
+            let i = offset + 1
             do {
                 let next = try makeReservation(at: date)
                 scheduled.append((next, date)); pendingCount = scheduled.count
                 reservationPeak = max(reservationPeak, pendingCount)
                 recordRelay("预约第\(pendingCount)个成功（本轮第\(i)次）：\(date.formatted(.dateTime.hour().minute().second())) · 状态 \(next.activityState)")
-                i += 1
             } catch {
                 let kind = isLimit(error) ? "数量上限" : "其他错误"
                 reservationFailure = "第\(pendingCount + 1)个失败（本轮第\(i)次，\(kind)）：\(errorDetail(error))"
@@ -574,32 +603,23 @@ import UIKit
         guard retiring == nil, renewTask == nil else { return }
         fillReservations()
     }
-    private func replanAndFill(intent: Bool, token: UUID) async {
-        guard running, sessionID == token else { return }
-        let existing = scheduled.filter { isPending($0.activity) }
-        if !existing.isEmpty && existing.count < reservationProbeLimit {
-            // First prove background scheduling works; if rejected, retain the
-            // existing reservations and simply try filling the remaining slots.
-            let date = Date().addingTimeInterval(Double(relayInterval))
-            do {
-                let first = try makeReservation(at: date)
-                let ids = Set(existing.map { $0.activity.id })
-                scheduled.removeAll { ids.contains($0.activity.id) }
-                scheduled.append((first, date)); scheduled.sort { $0.date < $1.date }
-                pendingCount = scheduled.count
-                reservationPeak = max(reservationPeak, pendingCount)
-                recordRelay("重新规划预约：新预约申请成功，替换 \(existing.count) 个原预约")
-                extraRetiring.append(contentsOf: existing.map { $0.activity })
-                for entry in existing { await entry.activity.end(nil, dismissalPolicy: .immediate) }
-                guard running, sessionID == token else { return }
-                extraRetiring.removeAll { ids.contains($0.id) }
-            } catch {
-                reservationFailure = "重新规划时追加第\(scheduled.count + 1)个失败（\(isLimit(error) ? "数量上限" : "其他错误")）：\(errorDetail(error))"
-                relayStatus = "重新预约受限，保留已有预约：\(error.localizedDescription)"
-                recordRelay(reservationFailure)
-            }
+    // Remove every old appointment, even if there are already four. Keep
+    // references until end() returns so stop() can still clean them up.
+    private func clearQueueForRenew(token: UUID, source: String) async -> Bool {
+        guard running, sessionID == token else { return false }
+        let targets = scheduled.map { $0.activity }
+        scheduled.removeAll(); pendingCount = 0
+        relayStatus = "正在取消原预约队列"
+        recordRelay("\(source)：取消原预约 \(targets.count) 个")
+        extraRetiring.append(contentsOf: targets)
+        for target in targets {
+            await target.end(nil, dismissalPolicy: .immediate)
+            guard running, sessionID == token else { return false }
+            recordRelay("旧预约结束返回：\(target.id) · \(target.activityState)")
         }
-        fillReservations(intent: intent)
+        let ids = Set(targets.map { $0.id })
+        extraRetiring.removeAll { ids.contains($0.id) }
+        return true
     }
     func cancelRelay() {
         guard retiring == nil, renewTask == nil else { return }
@@ -650,10 +670,12 @@ import UIKit
     }
     func copyDiagnostics() {
         let lines = ["IslandSpeed 1.1.8 · \(Date())", "定位：\(useLocation) · \(locationStatus)", "活动：\(activityState) · \(activityAge)s · 重建 \(renewCount) · ID \(currentActivityID)", renewStatus, "采样/发起/返回/同值跳过检查：\(sampleCount)/\(attemptCount)/\(submitCount)/\(unchangedChecks)", "最近发起显示值：\(lastPublishedValue)", "防抖检查抑制：\(suppressedCount) · 当前活动发起：\(activityAttempts) · 内容观察：\(observedCount)", "预约：\(relayStatus)", "接力失败：\(renewFailures) · 展开信号：\(expandSignals)", "间隔：\(refreshInterval)s · 实际 \(effectiveInterval)s · 心跳关 · 时间戳开", "最近返回耗时：\(lastLatency)s · 循环中断：\(lastGap)s", backgroundReport]
-        let extra = ["本轮成功预约峰值：\(reservationPeak) · 当前待接力：\(pendingCount)",
+        let extra = ["本轮成功预约峰值：\(reservationPeak) · 当前待接力：\(pendingCount) · 累计接力：\(renewCount + relayCount)",
+                     "预约时间表：\(scheduled.map { $0.date.formatted(.dateTime.hour().minute().second()) }.joined(separator: "、"))",
                      "最近预约探测：\(reservationProbe)", "最近预约失败：\(reservationFailure)",
                      "长按实验：\(expandRelay) · 信号 \(expandSignals) · 尝试 \(expansionAttempts) · 成功 \(expansionSuccesses) · 失败 \(expansionFailures) · 跳过 \(expansionSkipped)",
                      "最近展开信号结果：\(expansionResult)", "最近展开接力结果：\(expansionLastAttempt)",
+                     "Intent 路由：\(intentRoutingMode)",
                      "按钮接力：\(buttonAttempts) 次，成功 \(buttonSuccesses) 次，失败 \(buttonFailures) 次；扩展信号 \(buttonFallbackSignals) 次；阶段：\(buttonStage)；\(buttonResult)", "--- 接力事件（最近120条，跨启动保留） ---"]
         UIPasteboard.general.string = (lines + extra + relayEvents).joined(separator: "\n")
     }
