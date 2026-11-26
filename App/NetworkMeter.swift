@@ -6,7 +6,7 @@ import Darwin
 struct NetworkMeter {
     struct Count { var rx: UInt32; var tx: UInt32 }
     private var previous: [String: Count] = [:]
-    private var last: TimeInterval?
+    private var last: ContinuousClock.Instant?
 
     static func counters() -> [String: Count]? {
         var head: UnsafeMutablePointer<ifaddrs>?
@@ -30,18 +30,35 @@ struct NetworkMeter {
     }
 
     mutating func sample() -> (down: Double, up: Double)? {
-        guard let now = Self.counters() else { previous = [:]; last = nil; return nil }
-        let t = ProcessInfo.processInfo.systemUptime
-        defer { previous = now; last = t }
-        guard let last, t > last, t - last < 5 else { return nil }
-        var rx: UInt64 = 0, tx: UInt64 = 0
-        for (name, count) in now {
-            guard let old = previous[name] else { continue }
-            // A counter reset can look like a wrap; reject implausible wrap rates.
-            let dr = UInt64(count.rx &- old.rx), dt = UInt64(count.tx &- old.tx)
-            if Double(dr) / (t-last) < 500_000_000 { rx += dr }
-            if Double(dt) / (t-last) < 500_000_000 { tx += dt }
+        sample(Self.counters(), at: .now)
+    }
+
+    mutating func sample(_ counters: [String: Count]?, at time: ContinuousClock.Instant) -> (down: Double, up: Double)? {
+        guard let counters, !counters.isEmpty else {
+            last = nil
+            previous.removeAll()
+            return nil
         }
-        return (Double(rx) / (t-last), Double(tx) / (t-last))
+        defer { previous = counters; last = time }
+        guard let last else { return nil }
+        let interval = last.duration(to: time)
+        guard interval > .zero, interval < .seconds(5) else { return nil }
+        let parts = interval.components
+        let elapsed = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+        var received: UInt64 = 0
+        var sent: UInt64 = 0
+        var measured = false
+        for (name, current) in counters {
+            guard let old = previous[name] else { continue }
+            let rx = UInt64(current.rx &- old.rx)
+            let tx = UInt64(current.tx &- old.tx)
+            // Preserve the original wrap guard. A reset or a new interface needs a new baseline.
+            guard Double(rx) / elapsed < 500_000_000, Double(tx) / elapsed < 500_000_000 else { continue }
+            received += rx
+            sent += tx
+            measured = true
+        }
+        guard measured else { return nil }
+        return (Double(received) / elapsed, Double(sent) / elapsed)
     }
 }

@@ -6,6 +6,7 @@ struct SpeedAttributes: ActivityAttributes {
         var down: Double
         var up: Double
         var sampledAt: Date
+        var sampleNumber: Int? = nil // Older activities did not include a sequence number.
     }
     var startedAt: Date
 }
