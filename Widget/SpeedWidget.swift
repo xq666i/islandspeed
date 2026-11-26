@@ -46,7 +46,7 @@ struct SpeedWidget: Widget {
         let stamp = state.sampledAt.formatted(.dateTime.hour().minute().second())
         let label = state.sampleNumber.map { "样本 #\($0)" } ?? "采样"
         let note = state.sampleNumber == 0 ? "等待首个有效样本" : "\(context.isStale ? "上次" : "")\(label) · \(stamp)"
-        return Text(note).font(.caption2).foregroundStyle(.secondary)
+        return Text(note).font(.caption2).foregroundStyle(.secondary).contentTransition(.identity)
     }
 
     private func compact(_ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?) -> some View {
@@ -56,7 +56,7 @@ struct SpeedWidget: Widget {
             VStack(alignment: .leading, spacing: 0) {
                 Text(unavailable == nil ? p.0 : "—").font(.system(size: 12, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.7).lineLimit(1)
                 Text(unavailable ?? p.1).font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
-            }
+            }.contentTransition(.identity)
         }.foregroundStyle(.white)
     }
 
@@ -64,7 +64,7 @@ struct SpeedWidget: Widget {
         let p = RateText.parts(value)
         return VStack(alignment: .leading, spacing: 3) {
             Label(title, systemImage: icon).font(.caption).foregroundStyle(tint)
-            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: 21, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white)
+            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: 21, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white).contentTransition(.identity)
         }
     }
 }

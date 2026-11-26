@@ -16,6 +16,11 @@ enum MonitoringMode: String, CaseIterable {
 }
 
 @MainActor final class SpeedMonitor: ObservableObject {
+    static let samplesPerSecond = 4
+    private static let sampleInterval: Duration = .milliseconds(1_000 / samplesPerSecond)
+    private static let unchangedRefreshInterval: Duration = .seconds(1)
+    private static let slowSubmissionThreshold: Duration = .seconds(1)
+
     @Published private(set) var down: Double = 0
     @Published private(set) var up: Double = 0
     @Published private(set) var running = false
@@ -37,9 +42,14 @@ enum MonitoringMode: String, CaseIterable {
     private var measurement: BackgroundMeasurement?
     private var starting = false
     private var loop: Task<Void, Never>?
-    private var submissions: [Int: Task<Void, Never>] = [:]
-    private var lastAttempt: ContinuousClock.Instant?
-    private var lastSystemDisplay: ContinuousClock.Instant?
+    private struct Submission {
+        let started: ContinuousClock.Instant
+        let task: Task<Void, Never>
+    }
+    private var submissions: [Int: Submission] = [:]
+    private var needsSubmission = false
+    private var lastDisplay: (text: String, instant: ContinuousClock.Instant)?
+    private var lastSampleInstant: ContinuousClock.Instant?
     private var lastTick: Date?
     private var peakDown: Double = 0
     private var peakUp: Double = 0
@@ -78,7 +88,8 @@ enum MonitoringMode: String, CaseIterable {
         sampleCount = 0; submitCount = 0
         lastSample = nil; lastSubmit = nil
         lastTick = nil; lastGap = 0
-        lastAttempt = nil; lastSystemDisplay = nil
+        lastDisplay = nil; lastSampleInstant = nil
+        needsSubmission = false
         backgroundBaseline = nil
         backgroundReport = "尚未进行后台测试"
         running = true
@@ -89,7 +100,7 @@ enum MonitoringMode: String, CaseIterable {
                 finish("当前系统无法启动后台测量")
                 return
             }
-            let session = BackgroundMeasurement(minutes: minutes, bundleID: bundleID)
+            let session = BackgroundMeasurement(minutes: minutes, samplesPerSecond: Self.samplesPerSecond, bundleID: bundleID)
             measurement = session
             backgroundStatus = "等待系统批准，请暂留前台"
             status = "正在申请后台测量"
@@ -118,13 +129,14 @@ enum MonitoringMode: String, CaseIterable {
         status = "采样中"
         loop = Task { [weak self] in
             let clock = ContinuousClock()
-            var next = clock.now.advanced(by: .seconds(1))
+            let interval = Self.sampleInterval
+            var next = clock.now.advanced(by: interval)
             while !Task.isCancelled {
-                do { try await clock.sleep(until: next, tolerance: .milliseconds(50)) } catch { return }
+                do { try await clock.sleep(until: next, tolerance: .milliseconds(10)) } catch { return }
                 guard !Task.isCancelled, let self, self.running else { return }
                 self.tick()
-                next = next.advanced(by: .seconds(1))
-                if next <= clock.now { next = clock.now.advanced(by: .seconds(1)) }
+                next = next.advanced(by: interval)
+                if next <= clock.now { next = clock.now.advanced(by: interval) }
             }
         }
     }
@@ -136,8 +148,9 @@ enum MonitoringMode: String, CaseIterable {
         running = false
         loop?.cancel()
         loop = nil
-        for pending in submissions.values { pending.cancel() }
+        for pending in submissions.values { pending.task.cancel() }
         submissions.removeAll()
+        needsSubmission = false
         if let old = activity {
             activity = nil
             endActivity(old)
@@ -191,12 +204,11 @@ enum MonitoringMode: String, CaseIterable {
             return
         }
         let now = ContinuousClock.now
-        let refreshSystemCard = measurement != nil && (lastSystemDisplay.map { $0.duration(to: now) >= .seconds(2) } ?? true)
         guard let result = meter.sample() else {
+            needsSubmission = false
             status = "等待有效网卡样本"
-            if refreshSystemCard {
+            if displayIsDue(status, at: now) {
                 measurement?.showRates(status)
-                lastSystemDisplay = now
             }
             return
         }
@@ -205,18 +217,35 @@ enum MonitoringMode: String, CaseIterable {
         peakDown = max(peakDown, down)
         peakUp = max(peakUp, up)
         lastSample = date
+        lastSampleInstant = now
         sampleCount += 1
-        measurement?.record(count: sampleCount)
         if let measurement, sampleCount >= measurement.target {
+            measurement.record(count: sampleCount)
             finish("后台测量完成", completed: true)
             return
         }
-        if refreshSystemCard {
-            let stamp = date.formatted(.dateTime.hour().minute().second())
-            measurement?.showRates("\(ratePair(down, up)) · \(stamp)")
-            lastSystemDisplay = now
+        let rates = ratePair(down, up)
+        if displayIsDue(rates, at: now) {
+            needsSubmission = true
+            if let measurement {
+                measurement.record(count: sampleCount)
+                let stamp = date.formatted(.dateTime.hour().minute().second())
+                measurement.showRates("\(rates) · \(stamp)")
+            }
         }
-        publish(activity, at: date, now: now)
+        let blocked = !submissions.isEmpty && submissions.values.allSatisfy {
+            $0.started.duration(to: now) >= Self.slowSubmissionThreshold
+        }
+        let message = blocked ? "采样中，灵动岛更新等待系统返回" : "采样中"
+        if status != message { status = message }
+        submitLatest(to: activity, now: now)
+    }
+
+    private func displayIsDue(_ text: String, at now: ContinuousClock.Instant) -> Bool {
+        if let lastDisplay, text == lastDisplay.text,
+           lastDisplay.instant.duration(to: now) < Self.unchangedRefreshInterval { return false }
+        lastDisplay = (text, now)
+        return true
     }
 
     private func ratePair(_ down: Double, _ up: Double) -> String {
@@ -224,23 +253,22 @@ enum MonitoringMode: String, CaseIterable {
         return "↓ \(d.0) \(d.1)  ↑ \(u.0) \(u.1)"
     }
 
-    private func publish(_ activity: Activity<SpeedAttributes>, at date: Date, now: ContinuousClock.Instant) {
-        status = "采样中"
-        let sinceAttempt = lastAttempt.map { $0.duration(to: now) }
-        if !submissions.isEmpty {
-            guard let sinceAttempt, sinceAttempt >= .seconds(5) else { return }
-            status = "采样中，灵动岛更新等待系统返回"
-            // On newer systems a timestamp prevents a delayed older update from winning.
-            // Allow one recovery lane; also bound memory if both OS calls are blocked.
-            guard #available(iOS 17.2, *), submissions.count < 2 else { return }
-        } else if let sinceAttempt, sinceAttempt < .seconds(2) {
+    private func submitLatest(to activity: Activity<SpeedAttributes>, now: ContinuousClock.Instant) {
+        guard needsSubmission, let date = lastSample, let lastSampleInstant else { return }
+        guard lastSampleInstant.duration(to: now) < Self.unchangedRefreshInterval else {
+            needsSubmission = false
             return
         }
+        if !submissions.isEmpty {
+            // Timestamped updates can overlap without an older reading replacing a
+            // newer one. When both calls are busy, retain only the latest sample.
+            guard #available(iOS 17.2, *), submissions.count < 2 else { return }
+        }
+        needsSubmission = false
         let sequence = sampleCount
         let state = SpeedAttributes.ContentState(down: down, up: up, sampledAt: date, sampleNumber: sequence)
         let content = ActivityContent(state: state, staleDate: date.addingTimeInterval(8), relevanceScore: 100)
-        lastAttempt = now
-        submissions[sequence] = Task { [weak self] in
+        let task = Task { [weak self] in
             guard !Task.isCancelled else { return }
             if #available(iOS 17.2, *) {
                 await activity.update(content, timestamp: date)
@@ -251,7 +279,11 @@ enum MonitoringMode: String, CaseIterable {
             self.submissions.removeValue(forKey: sequence)
             self.submitCount += 1
             self.lastSubmit = Date()
+            // One pending change represents the newest reading, irrespective of how
+            // many samples arrived while ActivityKit was busy.
+            self.submitLatest(to: activity, now: .now)
         }
+        submissions[sequence] = Submission(started: now, task: task)
     }
 
     func sceneChanged(_ phase: ScenePhase) {

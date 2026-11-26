@@ -6,14 +6,16 @@ import Foundation
 @MainActor
 final class BackgroundMeasurement {
     let target: Int
+    private let durationSeconds: Int
     private let identifier: String
     private var awaitingLaunch = false
     private var task: BGTask?
     private var launchTimeout: Task<Void, Never>?
     private var deadline: ContinuousClock.Instant?
 
-    init(minutes: Int, bundleID: String) {
-        target = minutes * 60
+    init(minutes: Int, samplesPerSecond: Int, bundleID: String) {
+        durationSeconds = minutes * 60
+        target = durationSeconds * samplesPerSecond
         identifier = "\(bundleID).measurement.\(UUID().uuidString)"
     }
 
@@ -51,7 +53,7 @@ final class BackgroundMeasurement {
                 job.progress.totalUnitCount = Int64(self.target)
                 job.progress.completedUnitCount = 0
                 // Bound even a run in which the interfaces disappear or the device sleeps.
-                self.deadline = ContinuousClock.now.advanced(by: .seconds(self.target + 5))
+                self.deadline = ContinuousClock.now.advanced(by: .seconds(self.durationSeconds + 5))
                 onStart()
             }
         }

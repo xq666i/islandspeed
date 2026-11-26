@@ -33,7 +33,7 @@ struct ContentView: View {
                                 Text("约 \(minutes) 分钟").tag(minutes)
                             }
                         }.disabled(monitor.running || busy)
-                        Text("每秒采一个网速样本，采满 \(monitor.minutes * 60) 个后结束。看到“后台测量已启动”再切到其他 App。若灵动岛显示系统进度圈，可长按查看上下行网速。")
+                        Text("目标每秒采样 \(SpeedMonitor.samplesPerSecond) 次，本轮约 \(monitor.minutes) 分钟。看到“后台测量已启动”再切到其他 App。若灵动岛显示系统进度圈，可长按查看上下行网速。")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else if monitor.mode == .audio {
                         Toggle("使用低音量音频（可能听见）", isOn: $monitor.quietAudio)
@@ -61,7 +61,7 @@ struct ContentView: View {
                             .buttonStyle(.bordered).disabled(busy)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("后台诊断 · v1.0.2").font(.headline)
+                        Text("后台诊断 · 快速刷新").font(.headline)
                         if monitor.running { Text(monitor.status) }
                         if monitor.mode == .audio { Text("音频：\(monitor.audioStatus)") }
                         Text("有效采样：\(monitor.sampleCount) 次")
@@ -71,7 +71,7 @@ struct ContentView: View {
                         Text("最近循环中断：\(String(format: "%.1f", monitor.lastGap)) 秒")
                         Text(monitor.backgroundReport)
                     }.font(.footnote).monospacedDigit()
-                    Text("每秒采样，约每两秒提交一次网速。长按灵动岛可核对它实际显示的样本编号和采样时间。")
+                    Text("目标每秒采样 \(SpeedMonitor.samplesPerSecond) 次，显示值变化时立即提交。读数相同时约每秒更新一次采样时间。长按网速卡可查看样本编号。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(20)
             }.navigationTitle("灵动网速")
