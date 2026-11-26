@@ -6,9 +6,13 @@ struct SpeedAttributes: ActivityAttributes {
         var down: Double
         var up: Double
         var sampledAt: Date
-        var sampleNumber: Int? = nil // Older activities did not include a sequence number.
+        var sampleNumber: Int? = nil
+        var pendingRelays: Int? = nil
+        var totalRelays: Int? = nil
+        var nextRelay: Date? = nil
     }
     var startedAt: Date
+    var expandRelay: Bool? = nil
 }
 
 enum RateText {

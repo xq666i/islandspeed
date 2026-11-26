@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.1.7'
-    CURRENT_PROJECT_VERSION: '11'
+    MARKETING_VERSION: '1.1.3'
+    CURRENT_PROJECT_VERSION: '7'
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -16,7 +16,7 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes: [quiet.wav, silence.wav, pip-test.mp4, PiPSession.swift, PiPPrivateExperiment.swift, RenewIslandIntent.swift]
+        excludes: [quiet.wav, silence.wav]
       - Shared
     dependencies:
       - target: IslandSpeedWidget

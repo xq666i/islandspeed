@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -25,7 +26,20 @@ struct SpeedWidget: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     detailed("上传", "arrow.up", context.state.up, .cyan, unavailable(context))
                 }
-                DynamicIslandExpandedRegion(.bottom) { sampleInfo(context) }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(spacing: 4) {
+                        sampleInfo(context)
+                        if #available(iOS 17.0, *) {
+                            Button(intent: RelayIslandIntent()) {
+                                Label("立即接力", systemImage: "arrow.clockwise")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }.buttonStyle(.bordered).tint(.white)
+                        }
+                    }.onAppear {
+                        if context.attributes.expandRelay == true { RelaySignal.post() }
+                    }
+                }
             } compactLeading: {
                 compact("arrow.down", context.state.down, .green, unavailable(context))
             } compactTrailing: {
@@ -51,6 +65,14 @@ struct SpeedWidget: Widget {
             HStack(spacing: 4) {
                 Text("系统计时对照")
                 Text(context.attributes.startedAt, style: .timer).monospacedDigit()
+            }
+            HStack(spacing: 6) {
+                Text("剩余预约 \(state.pendingRelays ?? 0) · 接力 \(state.totalRelays ?? 0)")
+                if let next = state.nextRelay {
+                    Text("下次")
+                    Text(timerInterval: min(context.attributes.startedAt, next)...next, countsDown: true)
+                        .monospacedDigit()
+                }
             }
         }.font(.caption2).foregroundStyle(.secondary)
     }

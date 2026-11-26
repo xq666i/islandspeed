@@ -46,30 +46,7 @@ struct ContentView: View {
                                 ForEach([1, 2, 3, 5, 10, 15], id: \.self) { Text("\($0) 秒").tag($0) }
                             }.labelsHidden().pickerStyle(.menu)
                         }
-                        setting("相同读数心跳") {
-                            Picker("相同读数心跳", selection: $monitor.heartbeat) {
-                                Text("关闭").tag(0)
-                                ForEach([5, 10, 15, 30, 60], id: \.self) { Text("\($0) 秒").tag($0) }
-                            }.labelsHidden().pickerStyle(.menu)
-                        }
-                        Text("默认关闭心跳：上下行实际显示值均未变化时不提交。不足 500 KB/s 保留原精度；高 KB/s 及 MB/s 自动防抖。关闭心跳时不使用定时过期标记，长按网速卡可核对最后发布的样本时间。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        Toggle("自适应更新节流", isOn: $monitor.adaptive)
-                        Toggle("使用带时间戳的更新 API", isOn: $monitor.timestamped)
-                        if monitor.heartbeat > 0 {
-                            setting("数据过期时间（至少）") {
-                                Picker("数据过期时间", selection: $monitor.staleSeconds) {
-                                    ForEach([30, 60, 120], id: \.self) { Text("\($0) 秒").tag($0) }
-                                }.labelsHidden().pickerStyle(.menu)
-                            }
-                        }
-                        setting("活动相关性") {
-                            Picker("活动相关性", selection: $monitor.relevance) {
-                                ForEach([0, 50, 100], id: \.self) { Text("\($0)").tag($0) }
-                            }.labelsHidden().pickerStyle(.menu)
-                        }
-                        Toggle("返回前台自动续期（60 秒）", isOn: $monitor.foregroundRenew)
-                        Text("返回 App 时，当前活动年龄达到 60 秒即重建；不停止采样。")
+                        Text("仅在实际显示值变化时提交；不足 500 KB/s 保留原精度，高 KB/s 和 MB/s 自动防抖。返回前台时当前活动满 60 秒自动接力。")
                             .font(.footnote).foregroundStyle(.secondary)
                         if monitor.running {
                             Button("立即重建灵动岛（不停止采样）") { monitor.renewNow() }.buttonStyle(.bordered)
@@ -84,21 +61,18 @@ struct ContentView: View {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
                                 }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
                             }
-                            setting("预约数量") {
-                                Picker("预约数量", selection: $monitor.relaySlots) {
-                                    ForEach([1, 2, 3], id: \.self) { Text("\($0) 个").tag($0) }
-                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
-                            }
-                            Text("仅在前台预约，系统到时启动；必须提供提醒，可能出现提示音和短暂双活动。接力需要采样进程仍在运行。")
+                            Text("默认自动探测系统允许的预约数量。到时启动可能有提示音或短暂双活动。点击立即接力会尝试重新补满。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
-                                if monitor.pendingCount == 0 {
-                                    Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
-                                } else {
+                                Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
+                                if monitor.pendingCount > 0 {
                                     Button("取消剩余预约") { monitor.cancelRelay() }.buttonStyle(.bordered)
                                 }
                             }
                         }
+                        Toggle("长按自动接力实验", isOn: $monitor.expandRelay).disabled(monitor.running)
+                        Text("仅尝试监听展开视图出现的信号；可能不触发、提前触发或被系统拒绝。运行满 60 秒才尝试，每个活动最多一次。请在开启监控前设置。")
+                            .font(.footnote).foregroundStyle(.secondary)
                         setting("更新额度恢复实验") {
                             Picker("更新额度恢复实验", selection: $monitor.recoveryPause) {
                                 Text("关闭").tag(0)
@@ -108,12 +82,41 @@ struct ContentView: View {
                         Text("开启后，每个活动每发起约 90 次更新暂停提交指定时长，采样继续；是否能恢复额度尚待测试。暂停期间显示旧值。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("接力实验结果").font(.headline)
+                        Text("本轮成功预约峰值：\(monitor.reservationPeak) 个").font(.subheadline.weight(.semibold))
+                        Text("当前待接力：\(monitor.pendingCount) 个 · 自动接力成功：\(monitor.relayCount) 次")
+                        Text("最近探测：\(monitor.reservationProbe)")
+                        Text("最近预约失败：\(monitor.reservationFailure)").textSelection(.enabled)
+                        Divider()
+                        Text("长按自动接力实验").font(.subheadline.weight(.semibold))
+                        Text("展开信号 \(monitor.expandSignals) 次 · 跳过 \(monitor.expansionSkipped) 次")
+                        Text("接力尝试 \(monitor.expansionAttempts) 次 · 成功 \(monitor.expansionSuccesses) 次 · 失败 \(monitor.expansionFailures) 次")
+                        Text("最近信号：\(monitor.expansionResult)")
+                        Text("最近接力：\(monitor.expansionLastAttempt)")
+                        Text("0 次信号表示主程序没有收到展开信号，不代表没有长按。接力成功只表示创建新活动，实际刷新速度仍需观察。")
+                            .foregroundStyle(.secondary)
+                        Divider()
+                        Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次")
+                        Text(monitor.buttonResult)
+                        Button("复制实验诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
+                        DisclosureGroup("接力事件记录（最近 \(monitor.relayEvents.count) 条）") {
+                            ForEach(Array(monitor.relayEvents.suffix(120).reversed().enumerated()), id: \.offset) { entry in
+                                Text(entry.element).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                                Divider()
+                            }
+                            Button("清除事件记录", role: .destructive) { monitor.clearRelayEvents() }.buttonStyle(.bordered)
+                        }
+                        Text("事件记录仅保存在本机；停止监控、重新打开软件后仍可查看。")
+                            .foregroundStyle(.secondary)
+                    }.font(.footnote).monospacedDigit()
                     VStack(alignment: .leading, spacing: 8) {
                         Text("后台诊断").font(.headline)
                         Text("定位：\(monitor.locationStatus)")
                         Text("活动状态：\(monitor.activityState) · 当前间隔：\(monitor.effectiveInterval)s")
                         Text("活动已运行：\(monitor.activityAge) 秒 · 重建 \(monitor.renewCount) 次")
                         Text(monitor.renewStatus)
+                        Text("接力失败：\(monitor.renewFailures) 次 · 展开信号：\(monitor.expandSignals) 次")
                         Text("更新调用发起：\(monitor.attemptCount) 次 · 最近返回耗时 \(String(format: "%.2f", monitor.lastLatency)) 秒")
                         Text("有效采样：\(monitor.sampleCount) 次")
                         Text("相同显示值跳过检查：\(monitor.unchangedChecks) 次")
@@ -131,7 +134,7 @@ struct ContentView: View {
                         Text(monitor.backgroundReport)
                         Button("复制实验诊断") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                     }.font(.footnote).monospacedDigit()
-                    Text("每 0.25 秒采样，最近 4 个有效样本平均。仅在实际显示值变化时按选定最短间隔提交；可选心跳。更新调用返回不等于系统已渲染。长按网速卡可查看样本编号。")
+                    Text("每 0.25 秒采样，最近 4 个有效样本平均。仅在实际显示值变化时按选定最短间隔提交；不发相同读数心跳。更新调用返回不等于系统已渲染。长按网速卡可查看样本编号。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(20)
             }.navigationTitle("灵动网速")
