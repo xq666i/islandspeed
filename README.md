@@ -1,18 +1,31 @@
-# 灵动网速 IslandSpeed（实验原型）
+# 灵动网速 IslandSpeed
 
-iOS 16.2+ / Dynamic Island iPhone。使用 SwiftUI、ActivityKit、WidgetKit。每秒读取 Wi-Fi 和蜂窝网络接口字节计数并计算差值；不主动下载测速，不访问服务器，不需要定位或 VPN。灵动岛左下载右上传，自动切换 B/s、KB/s、MB/s（十进制），长按查看大号显示。
+用 iPhone 灵动岛显示 Wi‑Fi 和蜂窝网络的下载、上传速率。App 通过读取本机网卡字节计数计算网速。短按灵动岛打开 App，长按可看最近样本和采样时间。
 
-## 无 Mac：GitHub Actions 构建
-1. 解压 ZIP，将 IslandSpeed 文件夹内部所有文件（包括隐藏的 .github）提交到自己的 GitHub 仓库根目录。可以使用 GitHub Desktop 或 git push，注意网页上传可能漏掉隐藏目录；也可逐个创建 `.github/workflows/build.yml`。
-2. 打开仓库 Actions → Build unsigned IPA → Run workflow。如工作流未显示，确认文件位于默认分支，且 Actions 已开启。push 到 main/master 也会自动触发。
-3. 构建成功后点进该次任务，在 Artifacts 下载 IslandSpeed-unsigned，解压得到 IslandSpeed-unsigned.ipa。
-4. 使用支持保留并签名 Widget/App Extension 的自签工具（例如 SideStore/AltStore；具体版本兼容性需验证），保留内嵌 IslandSpeedWidget.appex。主应用与扩展需要各自的标识和匹配的签名，扩展标识须以主应用标识加点为前缀。不要启用删除扩展选项。免费 Apple ID 可能受 App ID 数量及 7 天有效期限制。
+## 用 GitHub Actions 生成 IPA
 
-## 有 Mac
-安装 Xcode 和 Xcode 命令行工具、Homebrew，执行 `brew install xcodegen`，随后在目录执行 `bash build.sh`。输出 `dist/IslandSpeed-unsigned.ipa`。也可 `xcodegen generate` 后打开生成的 xcodeproj，为两个 target 配置自己的开发团队和标识，直接安装真机。
+1. 解压完整项目，将包含 `build.sh` 的这一层目录里的全部内容提交到仓库根目录。请包含隐藏目录 `.github`、`scripts` 和 `App` 中的两段 WAV 音频。
+2. 提交到 `main` 或 `master` 会自动构建。也可以打开 **Actions → Build unsigned IPA → Run workflow** 手动启动。
+3. 进入本次成功的运行，在 **Artifacts** 下载 **IslandSpeed-unsigned**。解压得到 `IslandSpeed-unsigned.ipa`。
+4. 用自己的签名工具签名并安装，保留内嵌的 `IslandSpeedWidget.appex`。如工具更改了主 App 包名，且 App 提示后台任务标识不匹配，将 `project.yml` 中的 `ISLANDSPEED_TASK_BUNDLE_ID` 设为提示的最终主 App 包名，重新构建并签名。
 
-## 使用与测试
-允许实时活动；若希望后台持续采样，先打开“实验性后台保活”再点开启。返回桌面或打开 Safari，进行视频播放/下载，检查灵动岛数值是否变化。对照 App 内数值和实际下载；测试锁屏、音频中断、低电量模式、Wi-Fi/蜂窝切换。关闭功能会结束实时活动和音频。数值过期后尝试显示暂停。单次活动最长 8 小时，之后需重新打开 App 开启。无声音频保活不是系统承诺，可能被中断/挂起，可能增加耗电或影响音频行为，不适合直接作为 App Store 上架方案。
+## 在 Mac 上使用
 
-## 状态与限制
-这是源码原型，不是已编译 IPA。当前编写环境为 Linux，无 Xcode/iPhone 真机，未执行 iOS SDK 编译或真机验证；CI 首次构建可能需要修正 SDK/API/签名差异。iOS 27 兼容性、后台保活与灵动岛逐秒刷新均未实测。接口流量为估算值，包括协议开销；不测 VPN 隧道单独流量、不支持全部外接网络接口，避免常见重复计数。接口重置、计数器回绕等可能导致采样异常。灵动岛内容展示优先级及频率由系统控制，其他实时活动可能占用位置。没有任何系统级修改。
+完整包附带 `IslandSpeed.xcodeproj` 和共享的 `IslandSpeed` scheme，可以用带 iPhoneOS 26 或更高版本 SDK 的 Xcode 直接打开。真机调试时为主 App 和扩展选择自己的开发团队，扩展包名应以主 App 包名加点开头。
+
+使用命令行生成未签名 IPA，可运行以下命令。构建时脚本会按 `project.yml` 重新生成工程。
+
+```sh
+brew install xcodegen
+bash build.sh
+```
+
+输出位于 `dist/IslandSpeed-unsigned.ipa`。脚本会检查源音频以及成品中的主程序、Widget、音频和后台任务标识。若文件缺失，构建日志会显示具体路径。
+
+## 使用和核对后台采样
+
+在 iOS 26 及以上版本选择「系统后台测量」，设定约 5、30 或 60 分钟的测量时长，点「开启灵动岛网速」。看到「后台测量已启动」后，可以切换到其他 App。若系统进度圈占据灵动岛，长按可查看速率。系统可以提前结束任务，岛上的绘制频率也受系统调度影响。
+
+要核对是否持续刷新，可以在 Safari 开始一段下载，长按灵动岛看样本编号和时间是否推进。一分钟后回到 App，「后台诊断」会显示离开期间的新增采样数和实时活动提交返回次数。数据过期时，界面会标出上一条样本。
+
+最低部署版本为 iOS 16.2。较早的系统可选择「仅前台」或「实验性音频」模式。音频模式循环播放本地音频，可能增加耗电或影响其他音频播放。速率为 Wi‑Fi 和蜂窝接口的估算值，VPN 隧道接口不单独计入。
