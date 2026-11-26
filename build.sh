@@ -18,17 +18,31 @@ if ! has_routing_sdk; then
     done
 fi
 has_routing_sdk || { echo 'ERROR: iOS 27 SDK required. Refusing to create a legacy-route IPA.' >&2; exit 1; }
-routing_flag=ISLANDSPEED_MAIN_TARGET_ROUTING
 echo 'Intent routing: REQUIRED explicit iOS 27 main target'
 xcodebuild -version
 xcrun --sdk iphoneos --show-sdk-version
 xcodegen generate
-# Inspect resolved compilation conditions for BOTH targets before building.
+# Verify explicit target-level flags and version after regenerating the project.
 for target in IslandSpeed IslandSpeedWidget; do
-    resolved=$(xcodebuild -project IslandSpeed.xcodeproj -target "$target" -configuration Release -sdk iphoneos "ISLANDSPEED_ROUTING_FLAG=$routing_flag" -showBuildSettings)
-    echo "$resolved" | grep -E "SWIFT_ACTIVE_COMPILATION_CONDITIONS = .*ISLANDSPEED_MAIN_TARGET_ROUTING" || { echo "ERROR: routing flag missing in $target" >&2; exit 1; }
+    resolved=$(xcodebuild -project IslandSpeed.xcodeproj -target "$target" -configuration Release -sdk iphoneos -showBuildSettings)
+    flags=$(printf '%s\n' "$resolved" | awk '$1 == "SWIFT_ACTIVE_COMPILATION_CONDITIONS" && $2 == "=" { $1=""; $2=""; print; exit }')
+    echo "$target SWIFT_ACTIVE_COMPILATION_CONDITIONS =$flags"
+    case " $flags " in
+        *" ISLANDSPEED_MAIN_TARGET_ROUTING "*) ;;
+        *) echo "ERROR: routing flag missing in $target; replace project.yml" >&2; exit 1 ;;
+    esac
+    case " $flags " in
+        *" ISLANDSPEED_APP "*)
+            [[ "$target" == IslandSpeed ]] || { echo 'ERROR: app-only flag present in widget' >&2; exit 1; } ;;
+        *)
+            [[ "$target" != IslandSpeed ]] || { echo 'ERROR: app-only flag missing in IslandSpeed' >&2; exit 1; } ;;
+    esac
+    version=$(printf '%s\n' "$resolved" | awk '$1 == "MARKETING_VERSION" && $2 == "=" {print $3; exit}')
+    build=$(printf '%s\n' "$resolved" | awk '$1 == "CURRENT_PROJECT_VERSION" && $2 == "=" {print $3; exit}')
+    echo "$target version: $version ($build)"
+    [[ "$version" == 1.2.0 && "$build" == 14 ]] || { echo 'ERROR: unexpected project version; replace project.yml' >&2; exit 1; }
 done
-xcodebuild -project IslandSpeed.xcodeproj -scheme IslandSpeed -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' "ISLANDSPEED_ROUTING_FLAG=$routing_flag" build
+xcodebuild -project IslandSpeed.xcodeproj -scheme IslandSpeed -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
 app=build/Build/Products/Release-iphoneos/IslandSpeed.app
 for bundle in "$app" "$app/PlugIns/IslandSpeedWidget.appex"; do
     echo "App Intents metadata: $bundle"

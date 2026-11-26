@@ -5,7 +5,7 @@ on:
     branches: [main, master]
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -17,3 +17,4 @@ jobs:
           name: IslandSpeed-unsigned
           path: dist/IslandSpeed-unsigned.ipa
           if-no-files-found: error
+  
