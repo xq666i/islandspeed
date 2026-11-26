@@ -10,6 +10,9 @@ import Foundation
     private(set) var lastEvent: Date?
     private(set) var error: String?
     var authorization: CLAuthorizationStatus { manager.authorizationStatus }
+    var canUseLocation: Bool {
+        authorization == .authorizedAlways || authorization == .authorizedWhenInUse
+    }
 
     override init() {
         super.init()
@@ -29,7 +32,7 @@ import Foundation
     }
 
     func start() {
-        guard !active, authorization == .authorizedAlways else { return }
+        guard !active, canUseLocation else { return }
         lastEvent = nil; error = nil
         active = true
         manager.allowsBackgroundLocationUpdates = true
@@ -38,6 +41,7 @@ import Foundation
     }
 
     func stop() {
+        guard active else { return }
         active = false
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
@@ -47,7 +51,7 @@ import Foundation
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if self.active && self.authorization != .authorizedAlways { self.stop() }
+            if self.active && !self.canUseLocation { self.stop() }
             self.onChange?()
         }
     }

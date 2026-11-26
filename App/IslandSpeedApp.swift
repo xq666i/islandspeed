@@ -18,12 +18,13 @@ struct ContentView: View {
                         rate("上传", "arrow.up", monitor.up, .cyan)
                     }
                     Text("后台定位 · 实验模式").font(.headline)
-                    Text("仅在监控期间请求后台定位更新以测试持续运行。不保存或上传坐标，可关闭精确位置。系统可能显示定位指示，也可能暂停后台执行。")
+                    Text("定位权限为可选，无需授权即可开启网速。允许定位后可辅助后台运行，不保存或上传坐标，可关闭精确位置。无定位辅助时系统可能较快暂停采样。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("权限：\(monitor.permission)").font(.subheadline)
                     if !monitor.authorized {
-                        Button("申请 / 升级定位权限") { monitor.requestPermission() }.buttonStyle(.bordered)
+                        Button(monitor.permissionButton) { monitor.requestPermission() }.buttonStyle(.bordered)
                         Button("打开系统设置") { monitor.openSettings() }.buttonStyle(.bordered)
+                        Text(monitor.permissionHint).font(.footnote).foregroundStyle(.secondary)
                     }
                     Button {
                         busy = true
@@ -34,7 +35,7 @@ struct ContentView: View {
                     } label: {
                         Text(monitor.running ? "停止灵动岛网速" : "开启灵动岛网速")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }.buttonStyle(.borderedProminent).disabled(busy || (!monitor.running && !monitor.authorized))
+                    }.buttonStyle(.borderedProminent).disabled(busy)
                     Picker("提交间隔", selection: $monitor.refreshInterval) {
                         Text("1 秒").tag(1); Text("2 秒").tag(2); Text("3 秒").tag(3)
                     }.pickerStyle(.segmented)

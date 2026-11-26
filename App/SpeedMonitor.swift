@@ -12,6 +12,8 @@ import UIKit
     @Published private(set) var status = "尚未开启"
     @Published private(set) var permission = "检查定位权限"
     @Published private(set) var authorized = false
+    @Published private(set) var permissionButton = "申请定位权限"
+    @Published private(set) var permissionHint = "定位为可选；不授权也可直接开启灵动岛。"
     @Published private(set) var locationStatus = "未开启"
     @Published private(set) var sampleCount = 0
     @Published private(set) var submitCount = 0
@@ -51,31 +53,65 @@ import UIKit
         location.onChange = { [weak self] in self?.refreshLocation() }
         refreshLocation()
     }
-    func requestPermission() { location.requestPermission(); refreshLocation() }
+    func requestPermission() {
+        switch location.authorization {
+        case .notDetermined:
+            permissionHint = "已请求定位权限。请在系统弹窗选择使用 App 期间允许（不要选仅允许一次），之后可申请始终允许。"
+            location.requestPermission()
+        case .authorizedWhenInUse:
+            permissionHint = "已请求升级为始终允许。系统可能延迟或不再显示弹窗；可点击打开系统设置检查权限。"
+            location.requestPermission()
+        case .denied, .restricted:
+            permissionHint = "定位未授权或受限，请在系统设置中检查。仍可直接开启网速。"
+            openSettings()
+        case .authorizedAlways:
+            permissionHint = "已获得始终允许定位。"
+        @unknown default:
+            permissionHint = "未知定位状态，请检查系统设置。"
+            openSettings()
+        }
+        refreshLocation()
+    }
     func openSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
     }
     private func refreshLocation() {
         authorized = location.authorization == .authorizedAlways
         switch location.authorization {
-        case .notDetermined: permission = "尚未授权，请先允许使用期间定位"
-        case .authorizedWhenInUse: permission = "使用期间允许，请升级为始终允许"
-        case .authorizedAlways: permission = "始终允许"
-        case .denied, .restricted: permission = "定位不可用，请检查系统设置"
-        @unknown default: permission = "未知权限"
+        case .notDetermined:
+            permission = "尚未授权"
+            permissionButton = "申请定位权限"
+        case .authorizedWhenInUse:
+            permission = "使用期间允许（可尝试后台定位）"
+            permissionButton = "升级为始终允许"
+        case .authorizedAlways:
+            permission = "始终允许"
+            permissionHint = "已获得始终允许定位。"
+        case .denied, .restricted:
+            permission = "定位不可用，请检查系统设置"
+            permissionButton = "前往设置授权"
+        @unknown default:
+            permission = "未知权限"
+            permissionButton = "前往设置检查"
         }
         if let error = location.error, location.active { locationStatus = error }
         else if let date = location.lastEvent, location.active { locationStatus = "最近定位回调：\(date.formatted(.dateTime.hour().minute().second()))" }
-        else { locationStatus = location.active ? "定位服务已启动，等待回调" : "未开启" }
-        if running && !authorized { finish("定位权限已撤销") }
+        else if location.active { locationStatus = "定位服务已启动，等待回调" }
+        else if running && !location.canUseLocation { locationStatus = "无定位辅助，切换到后台后可能暂停采样" }
+        else { locationStatus = "未开启" }
+        // Location assistance is optional and must never end an active Live Activity.
+        // Start only in the foreground; authorization changes can arrive during a system prompt.
+        if running && location.canUseLocation && !location.active && UIApplication.shared.applicationState == .active {
+            location.start()
+        } else if location.active && (!running || !location.canUseLocation) {
+            location.stop()
+        }
     }
     func start() async {
         guard !running, !starting else { return }
-        guard authorized else { status = "请先在系统设置中选择始终允许定位"; return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { status = "请允许实时活动"; return }
         starting = true; defer { starting = false }
         for old in Activity<SpeedAttributes>.activities { await old.end(nil, dismissalPolicy: .immediate) }
-        guard authorized else { return }
         let now = Date()
         do {
             activity = try Activity.request(attributes: SpeedAttributes(startedAt: now), content: ActivityContent(state: .init(down: 0, up: 0, sampledAt: now, sampleNumber: 0), staleDate: now.addingTimeInterval(30), relevanceScore: 100), pushType: nil)
@@ -90,8 +126,8 @@ import UIKit
         attemptCount = 0; lastLatency = 0
         lastAttempt = nil; lastKey = nil; inFlightSince = nil
         running = true; status = "监控中"
-        location.start()
-        guard running else { return }
+        // Starting the activity never requests or requires location permission.
+        refreshLocation()
         sampling = Task { [weak self] in
             let clock = ContinuousClock()
             let interval: Duration = .milliseconds(250)
@@ -229,6 +265,14 @@ import UIKit
         if phase == .background, running, baseline == nil { baseline = (sampleCount, submitCount, Date()) }
         if phase == .active {
             refreshLocation()
+            // UIKit's active state may lag the SwiftUI scene callback briefly.
+            // Retry the optional assistance after the scene becomes active.
+            if running && location.canUseLocation && !location.active {
+                Task { @MainActor [weak self] in
+                    await Task.yield()
+                    self?.refreshLocation()
+                }
+            }
             if let baseline {
                 backgroundReport = "离开 \(Int(max(0, Date().timeIntervalSince(baseline.date)))) 秒：新增 \(sampleCount - baseline.samples) 个样本，\(submitCount - baseline.submits) 次更新调用返回"
                 self.baseline = nil
