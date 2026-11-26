@@ -31,7 +31,7 @@ struct SpeedWidget: Widget {
             } compactTrailing: {
                 compact("arrow.up", context.state.up, .cyan, unavailable(context))
             } minimal: {
-                compact("arrow.down", context.state.down, .green, unavailable(context))
+                compact("arrow.down", context.state.down, .green, unavailable(context), minimal: true)
             }.keylineTint(.green)
         }
     }
@@ -49,22 +49,32 @@ struct SpeedWidget: Widget {
         return Text(note).font(.caption2).foregroundStyle(.secondary).contentTransition(.identity)
     }
 
-    private func compact(_ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?) -> some View {
+    private func compact(_ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?, minimal: Bool = false) -> some View {
         let p = RateText.parts(value)
+        let column: CGFloat = minimal ? 27 : 38
         return HStack(spacing: 2) {
             Image(systemName: icon).font(.system(size: 9, weight: .bold)).foregroundStyle(tint)
+                .frame(width: 10, height: 12)
             VStack(alignment: .leading, spacing: 0) {
-                Text(unavailable == nil ? p.0 : "—").font(.system(size: 12, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.7).lineLimit(1)
-                Text(unavailable ?? p.1).font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
+                Text(unavailable == nil ? p.0 : "—")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
+                    .frame(width: column, height: 14, alignment: .leading)
+                Text(unavailable ?? p.1).font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary).minimumScaleFactor(0.65).lineLimit(1)
+                    .frame(width: column, height: 10, alignment: .leading)
             }.contentTransition(.identity)
-        }.foregroundStyle(.white)
+        }.frame(width: column + 12, height: 24, alignment: .leading)
+            .foregroundStyle(.white).transaction { $0.animation = nil }
     }
 
     private func detailed(_ title: String, _ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?) -> some View {
         let p = RateText.parts(value)
         return VStack(alignment: .leading, spacing: 3) {
             Label(title, systemImage: icon).font(.caption).foregroundStyle(tint)
-            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: 21, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white).contentTransition(.identity)
-        }
+            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: 21, weight: .semibold, design: .monospaced))
+                .minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white).contentTransition(.identity)
+                .frame(width: 108, height: 26, alignment: .leading)
+        }.frame(width: 108, alignment: .leading).transaction { $0.animation = nil }
     }
 }
