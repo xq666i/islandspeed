@@ -6,7 +6,6 @@ import UIKit
 
 @MainActor final class SpeedMonitor: ObservableObject {
     static let samplesPerSecond = 4
-    static weak var current: SpeedMonitor?
     @Published private(set) var down: Double = 0
     @Published private(set) var up: Double = 0
     @Published private(set) var running = false
@@ -23,15 +22,12 @@ import UIKit
     @Published private(set) var lastGap: Double = 0
     @Published private(set) var backgroundReport = "尚未进行后台测试"
     @Published var refreshInterval = 1
-    @Published var autoRenew = false
-    @Published var foregroundRenew = false
-    @Published var renewalSeconds = 120
-    @Published var heartbeat = 5
+    @Published var foregroundRenew = true
+    @Published var heartbeat = 0 // 0: submit only when the visible value changes
     @Published var adaptive = false
     @Published var timestamped = true
-    @Published var lowTrafficGate = false
     @Published var relevance = 100
-    @Published var staleSeconds = 30
+    @Published var staleSeconds = 60
     @Published private(set) var effectiveInterval = 1
     @Published private(set) var activityState = "未开启"
     @Published private(set) var renewCount = 0
@@ -39,20 +35,9 @@ import UIKit
     @Published private(set) var activityAge = 0
     @Published private(set) var lastLatency = 0.0
     @Published private(set) var attemptCount = 0
+    @Published private(set) var unchangedChecks = 0
+    @Published private(set) var lastPublishedValue = "—"
     @Published var useLocation = true { didSet { refreshLocation() } }
-    @Published var pipHeight = 0.1
-    @Published var pipMode: PiPMode = .videoCall
-    @Published var pipAudio: PiPAudioMode = .temporary
-    @Published var pipFPS = 30
-    @Published var pipHide = false
-    @Published private(set) var pipPrivateStatus = "未启用"
-    @Published private(set) var pipSentFrames = 0
-    @Published private(set) var pipStatus = "未开启"
-    @Published private(set) var pipOccupied = false
-    @Published private(set) var pipFrames = 0
-    @Published private(set) var pipBackgroundReport = "尚未测试"
-    private var pipBaseline = 0
-    private let pip = PiPSession()
     private let location = LocationSession()
     private var activityStarted: ContinuousClock.Instant?
     private var lastAttempt: ContinuousClock.Instant?
@@ -61,10 +46,12 @@ import UIKit
     private var inFlightSince: ContinuousClock.Instant?
     private var renewTask: Task<Void, Never>?
     private var retiring: Activity<SpeedAttributes>?
-    private var backgroundRenewDenied = false
-    private var nextRenewAttempt: ContinuousClock.Instant?
     private var sessionID = UUID()
-    private var renewalAge: Duration { .seconds(renewalSeconds) }
+    private let renewalAge: Duration = .seconds(60)
+    private var foregroundRenewTask: Task<Void, Never>?
+    private var lastCheck: ContinuousClock.Instant?
+    private var lastPublishedPolicy: String?
+    private var lastValidInstant: ContinuousClock.Instant?
     private var meter = NetworkMeter()
     private var activity: Activity<SpeedAttributes>?
     private var sampling: Task<Void, Never>?
@@ -76,18 +63,8 @@ import UIKit
 
     init() {
         location.onChange = { [weak self] in self?.refreshLocation() }
-        pip.onChange = { [weak self] in self?.refreshPiP() }
-        Self.current = self
         refreshLocation()
     }
-    private func refreshPiP() {
-        pipStatus = pip.status; pipOccupied = pip.occupied; pipFrames = pip.frames; pipPrivateStatus = pip.privateStatus; pipSentFrames = pip.sentFrames
-    }
-    func togglePiP() {
-        if pip.occupied { pip.stop() }
-        else { pip.start(height: pipHeight, mode: pipMode, audioMode: pipAudio, fps: pipFPS, hide: pipHide) }
-    }
-    func changePiPHeight() { pip.setHeight(pipHeight) }
     func requestPermission() {
         switch location.authorization {
         case .notDetermined:
@@ -150,7 +127,7 @@ import UIKit
         for old in Activity<SpeedAttributes>.activities { await old.end(nil, dismissalPolicy: .immediate) }
         let now = Date()
         do {
-            activity = try Activity.request(attributes: SpeedAttributes(startedAt: now), content: ActivityContent(state: .init(down: 0, up: 0, sampledAt: now, sampleNumber: 0), staleDate: now.addingTimeInterval(Double(staleSeconds)), relevanceScore: Double(relevance)), pushType: nil)
+            activity = try Activity.request(attributes: SpeedAttributes(startedAt: now), content: ActivityContent(state: .init(down: 0, up: 0, sampledAt: now, sampleNumber: 0), staleDate: expiry(from: now), relevanceScore: Double(relevance)), pushType: nil)
         } catch { status = "实时活动启动失败：\(error.localizedDescription)"; return }
         meter = NetworkMeter(); _ = meter.sample()
         samples.removeAll(); down = 0; up = 0; sampleCount = 0; submitCount = 0
@@ -158,9 +135,9 @@ import UIKit
         backgroundReport = "尚未进行后台测试"
         sessionID = UUID()
         activityStarted = .now; activityAge = 0; renewCount = 0
-        renewStatus = "尚未重建"; backgroundRenewDenied = false; nextRenewAttempt = nil; effectiveInterval = refreshInterval; activityState = "active"
-        attemptCount = 0; lastLatency = 0
-        lastAttempt = nil; lastKey = nil; inFlightSince = nil
+        renewStatus = "尚未重建"; effectiveInterval = refreshInterval; activityState = "active"
+        attemptCount = 0; lastLatency = 0; unchangedChecks = 0; lastPublishedValue = "—"
+        lastAttempt = nil; lastKey = nil; inFlightSince = nil; lastCheck = nil; lastPublishedPolicy = nil; lastValidInstant = nil
         running = true; status = "监控中"
         // Starting the activity never requests or requires location permission.
         refreshLocation()
@@ -198,7 +175,7 @@ import UIKit
         }
         lastTick = now
         guard let reading = meter.sample() else { samples.removeAll(); return }
-        sampleCount += 1; lastSample = Date()
+        sampleCount += 1; lastSample = Date(); lastValidInstant = now
         samples.append(reading)
         if samples.count > 4 { samples.removeFirst(samples.count - 4) }
         down = samples.reduce(0) { $0 + $1.down } / Double(samples.count)
@@ -208,23 +185,30 @@ import UIKit
         let p = d.components
         return Double(p.seconds) + Double(p.attoseconds) / 1e18
     }
-    private func content() -> ActivityContent<SpeedAttributes.ContentState> {
-        let date = lastSample ?? Date()
-        let valid = lastSample != nil && !samples.isEmpty && Date().timeIntervalSince(date) < 2
+    // With change-only updates, a finite stale date would incorrectly expire
+    // a perfectly stable connection. An optional heartbeat re-enables expiry.
+    private func expiry(from date: Date) -> Date? {
+        guard heartbeat > 0 else { return nil }
+        return date.addingTimeInterval(Double(max(staleSeconds, heartbeat + max(refreshInterval, 15) + 5)))
+    }
+    private var policyKey: String { "\(heartbeat)|\(staleSeconds)|\(relevance)|\(refreshInterval)" }
+    private func content(valid: Bool) -> ActivityContent<SpeedAttributes.ContentState> {
+        let date = valid ? (lastSample ?? Date()) : Date()
         let state = SpeedAttributes.ContentState(down: valid ? down : 0, up: valid ? up : 0,
             sampledAt: date, sampleNumber: valid ? sampleCount : 0)
-        return ActivityContent(state: state, staleDate: date.addingTimeInterval(Double(staleSeconds)), relevanceScore: Double(relevance))
+        return ActivityContent(state: state, staleDate: expiry(from: date), relevanceScore: Double(relevance))
+    }
+    private func displayKey(valid: Bool) -> String {
+        guard valid else { return "待采样" }
+        let d = RateText.parts(down), u = RateText.parts(up)
+        return "↓ \(d.0) \(d.1) | ↑ \(u.0) \(u.1)"
     }
     private func controlUpdates() {
         guard running, let activity else { return }
         let now = ContinuousClock.now
         if let start = activityStarted {
             let age = Int(max(0, seconds(start.duration(to: now))))
-            if age != activityAge { activityAge = age; refreshPiP(); activityState = String(describing: activity.activityState) }
-            if autoRenew, start.duration(to: now) >= renewalAge,
-               UIApplication.shared.applicationState == .background, !backgroundRenewDenied {
-                renew(force: false)
-            }
+            if age != activityAge { activityAge = age; activityState = String(describing: activity.activityState) }
         }
         if let since = inFlightSince {
             if since.duration(to: now) > .seconds(5), status != "等待 ActivityKit 更新返回（见采样计数）" {
@@ -232,20 +216,33 @@ import UIKit
             }
             return
         }
-        guard renewTask == nil, let date = lastSample, !samples.isEmpty,
-              Date().timeIntervalSince(date) < 2 else { return }
+        guard renewTask == nil else { return }
         let base = max(1, refreshInterval)
         let delay = adaptive ? max(base, min(15, Int(ceil(lastLatency * 2)))) : base
         effectiveInterval = delay
         let interval = Duration.seconds(delay)
         if let lastAttempt, lastAttempt.duration(to: now) < interval { return }
-        let d = RateText.parts(down), u = RateText.parts(up)
-        let key = lowTrafficGate && down < 1024 && up < 1024 ? "低流量" : "\(d.0) \(d.1)|\(u.0) \(u.1)"
-        // Coalesce unchanged display values, with a configurable heartbeat.
-        if key == lastKey, let lastAttempt, lastAttempt.duration(to: now) < .seconds(heartbeat) { return }
-        lastAttempt = now; lastKey = key; inFlightSince = now
+        if let lastCheck, lastCheck.duration(to: now) < interval { return }
+        let valid = lastValidInstant.map { $0.duration(to: now) < .seconds(2) } == true && !samples.isEmpty
+        // A transient missing sample must not create spurious updates. After
+        // five seconds without data, publish unavailable once (if previously valid).
+        if !valid {
+            guard let lastValidInstant, lastValidInstant.duration(to: now) >= .seconds(5) else { return }
+        }
+        lastCheck = now
+        let key = displayKey(valid: valid)
+        let policy = policyKey
+        if key == lastKey, policy == lastPublishedPolicy {
+            if heartbeat == 0 || !valid || (lastAttempt.map { $0.duration(to: now) < .seconds(heartbeat) } ?? false) {
+                unchangedChecks += 1
+                return
+            }
+        }
+        lastAttempt = now; lastKey = key; lastPublishedPolicy = policy; inFlightSince = now
+        lastPublishedValue = key
         attemptCount += 1
-        let snapshot = content()
+        let snapshot = content(valid: valid)
+        let date = snapshot.state.sampledAt
         let token = sessionID
         let useTimestamp = timestamped
         updateTask = Task { [weak self] in
@@ -258,26 +255,19 @@ import UIKit
             self.submitCount += 1; self.lastSubmit = Date(); self.status = "监控中"
         }
     }
-    func renewNow() { renew(force: true) }
-    func renewFromIntent() -> Bool {
-        let before = renewCount
-        renew(force: true, viaIntent: true)
-        return renewCount > before
-    }
-    private func renew(force: Bool, viaIntent: Bool = false) {
-        guard running, renewTask == nil, retiring == nil, let old = activity else { return }
-        let now = ContinuousClock.now
-        if !force, let nextRenewAttempt, now < nextRenewAttempt { return }
-        let inBackground = UIApplication.shared.applicationState != .active
-        if inBackground && backgroundRenewDenied && !viaIntent { return }
-        nextRenewAttempt = now.advanced(by: .seconds(60))
+    func renewNow() { renew() }
+    private func renew() {
+        guard running, renewTask == nil, retiring == nil, let old = activity,
+              UIApplication.shared.applicationState == .active else { return }
+        let valid = lastValidInstant.map { $0.duration(to: .now) < .seconds(2) } == true && !samples.isEmpty
         do {
-            // Request first: if iOS refuses background creation, the existing activity survives.
-            let new = try Activity.request(attributes: SpeedAttributes(startedAt: Date()), content: content(), pushType: nil)
+            // Request first; preserve the previous activity on failure.
+            let new = try Activity.request(attributes: SpeedAttributes(startedAt: Date()), content: content(valid: valid), pushType: nil)
             updateTask?.cancel(); updateTask = nil; inFlightSince = nil
             activity = new; activityStarted = .now; activityAge = 0
-            lastAttempt = .now; lastKey = nil; renewCount += 1
-            renewStatus = viaIntent ? "快捷指令重建成功" : (inBackground ? "后台重建成功" : "前台重建成功")
+            lastAttempt = .now; lastCheck = nil; lastKey = displayKey(valid: valid); lastPublishedPolicy = policyKey
+            lastPublishedValue = lastKey ?? "—"; renewCount += 1
+            renewStatus = "前台重建成功"; status = "监控中"
             retiring = old
             let token = sessionID
             renewTask = Task { [weak self] in
@@ -286,12 +276,11 @@ import UIKit
                 self.retiring = nil; self.renewTask = nil
             }
         } catch {
-            if inBackground { backgroundRenewDenied = true }
-            renewStatus = (inBackground ? "后台重建受限，保留原活动：" : "重建失败，保留原活动：") + error.localizedDescription
+            renewStatus = "重建失败，保留原活动：" + error.localizedDescription
         }
     }
     func copyDiagnostics() {
-        let lines = ["IslandSpeed 1.1.5 · \(Date())", "定位：\(useLocation) · \(locationStatus)", "PiP：\(pipMode.rawValue) · \(pipAudio.rawValue) · \(pipHeight)pt · \(pipFPS)fps", pipStatus, pipPrivateStatus, "PiP 回调/入队：\(pipFrames)/\(pipSentFrames)", "活动：\(activityState) · \(activityAge)s · 重建 \(renewCount)", renewStatus, "采样/发起/返回：\(sampleCount)/\(attemptCount)/\(submitCount)", "间隔：\(refreshInterval)s · 实际 \(effectiveInterval)s · 心跳 \(heartbeat)s · 自适应 \(adaptive) · 低流量合并 \(lowTrafficGate) · 时间戳 \(timestamped)", "最近返回耗时：\(lastLatency)s · 循环中断：\(lastGap)s", backgroundReport, pipBackgroundReport]
+        let lines = ["IslandSpeed 1.1.6 · \(Date())", "定位：\(useLocation) · \(locationStatus)", "活动：\(activityState) · \(activityAge)s · 重建 \(renewCount)", renewStatus, "采样/发起/返回/同值跳过检查：\(sampleCount)/\(attemptCount)/\(submitCount)/\(unchangedChecks)", "最近发起显示值：\(lastPublishedValue)", "间隔：\(refreshInterval)s · 实际 \(effectiveInterval)s · 心跳 \(heartbeat)s（0=关） · 自适应 \(adaptive) · 时间戳 \(timestamped)", "最近返回耗时：\(lastLatency)s · 循环中断：\(lastGap)s", backgroundReport]
         UIPasteboard.general.string = lines.joined(separator: "\n")
     }
     func stop() { finish("已停止") }
@@ -301,18 +290,21 @@ import UIKit
         sampling?.cancel(); sampling = nil; publishing?.cancel(); publishing = nil
         updateTask?.cancel(); updateTask = nil; inFlightSince = nil
         renewTask?.cancel(); renewTask = nil
+        foregroundRenewTask?.cancel(); foregroundRenewTask = nil
         let old = activity; activity = nil
         let previous = retiring; retiring = nil
         sessionID = UUID()
         location.stop()
-        pip.stop()
         Task {
             if let old { await old.end(nil, dismissalPolicy: .immediate) }
             if let previous { await previous.end(nil, dismissalPolicy: .immediate) }
         }
     }
     func sceneChanged(_ phase: ScenePhase) {
-        if phase == .background, running, baseline == nil { baseline = (sampleCount, submitCount, Date()); pipBaseline = pip.frames }
+        if phase == .background {
+            foregroundRenewTask?.cancel(); foregroundRenewTask = nil
+            if running, baseline == nil { baseline = (sampleCount, submitCount, Date()) }
+        }
         if phase == .active {
             refreshLocation()
             // UIKit's active state may lag the SwiftUI scene callback briefly.
@@ -325,10 +317,24 @@ import UIKit
             }
             if let baseline {
                 backgroundReport = "离开 \(Int(max(0, Date().timeIntervalSince(baseline.date)))) 秒：新增 \(sampleCount - baseline.samples) 个样本，\(submitCount - baseline.submits) 次更新调用返回"
-                pipBackgroundReport = "离开期间新增 PiP 回调：\(max(0, pip.frames - pipBaseline)) 次；当前\(pip.active ? "运行" : (pip.suspended ? "挂起" : "未激活"))"
                 self.baseline = nil
                 if running, foregroundRenew, let start = activityStarted,
-                   start.duration(to: .now) >= renewalAge { renew(force: true) }
+                   start.duration(to: .now) >= renewalAge {
+                    let token = sessionID
+                    foregroundRenewTask?.cancel()
+                    foregroundRenewTask = Task { [weak self] in
+                        // ScenePhase may arrive slightly before UIApplication becomes active.
+                        for _ in 0..<10 {
+                            guard let self, !Task.isCancelled, self.running, self.sessionID == token else { return }
+                            if UIApplication.shared.applicationState == .active {
+                                if self.foregroundRenew, let start = self.activityStarted,
+                                   start.duration(to: .now) >= self.renewalAge { self.renew() }
+                                return
+                            }
+                            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                        }
+                    }
+                }
             }
         }
     }

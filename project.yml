@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.1.5'
-    CURRENT_PROJECT_VERSION: '9'
+    MARKETING_VERSION: '1.1.6'
+    CURRENT_PROJECT_VERSION: '10'
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -16,7 +16,7 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes: [quiet.wav, silence.wav]
+        excludes: [quiet.wav, silence.wav, pip-test.mp4, PiPSession.swift, PiPPrivateExperiment.swift, RenewIslandIntent.swift]
       - Shared
     dependencies:
       - target: IslandSpeedWidget
@@ -30,7 +30,7 @@ targets:
         UILaunchScreen: {}
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
-        UIBackgroundModes: [location, audio]
+        UIBackgroundModes: [location]
         NSLocationWhenInUseUsageDescription: '用于用户主动开启的后台网速监控实验。不保存或上传位置。'
         NSLocationAlwaysAndWhenInUseUsageDescription: '监控开启期间尝试利用后台定位更新保持网速采样，不保存或上传位置；停止监控即停止定位。'
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

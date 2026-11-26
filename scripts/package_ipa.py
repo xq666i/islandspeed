@@ -10,15 +10,15 @@ from zipfile import BadZipFile, ZipFile
 
 def package(app: Path, output: Path) -> None:
     widget = Path('PlugIns/IslandSpeedWidget.appex')
-    required = (Path('IslandSpeed'), Path('Info.plist'), Path('pip-test.mp4'), widget / 'IslandSpeedWidget', widget / 'Info.plist')
+    required = (Path('IslandSpeed'), Path('Info.plist'), widget / 'IslandSpeedWidget', widget / 'Info.plist')
     for relative in required:
         path = app / relative
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f'构建产物缺少文件：{path}')
     with (app / 'Info.plist').open('rb') as stream:
         info = plistlib.load(stream)
-    if set(info.get('UIBackgroundModes', [])) != {'location', 'audio'} or info.get('BGTaskSchedulerPermittedIdentifiers'):
-        raise ValueError('后台模式必须为 location 和 audio，不得保留后台测量任务标识')
+    if set(info.get('UIBackgroundModes', [])) != {'location'} or info.get('BGTaskSchedulerPermittedIdentifiers'):
+        raise ValueError('后台模式必须为 location，不得保留后台测量任务标识')
     for key in ('NSLocationWhenInUseUsageDescription', 'NSLocationAlwaysAndWhenInUseUsageDescription', 'NSSupportsLiveActivities'):
         if not info.get(key):
             raise ValueError(f'缺少 Info.plist 配置：{key}')
