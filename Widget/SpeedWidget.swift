@@ -50,7 +50,7 @@ struct SpeedWidget: Widget {
                                 .lineLimit(1).minimumScaleFactor(0.75)
                             Spacer(minLength: 4)
                             if #available(iOS 17.0, *) {
-                                Button(intent: RelayIslandIntent(activityID: context.activityID)) {
+                                Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
                                     Label("立即接力", systemImage: "arrow.clockwise")
                                         .font(.system(size: 12, weight: .semibold))
                                         .lineLimit(1).foregroundStyle(.white)
