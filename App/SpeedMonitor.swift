@@ -656,7 +656,7 @@ import UIKit
         recordRelay(reservationProbe)
         relayStatus = "已预约 \(pendingCount)/4 个"
     }
-    func reserveOneFromIntent(activityID: String, request: ReservationRequest) {
+    func reserveOneFromIntent(activityID: String, request: @escaping ReservationRequest) {
         standaloneAttempts += 1
         guard running, relayEnabled, let current = activity, current.id == activityID,
               retiring == nil, renewTask == nil, !timerInProgress else {
