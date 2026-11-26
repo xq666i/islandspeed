@@ -10,7 +10,7 @@ from zipfile import BadZipFile, ZipFile
 
 def package(app: Path, output: Path) -> None:
     widget = Path('PlugIns/IslandSpeedWidget.appex')
-    required = (Path('IslandSpeed'), Path('Info.plist'), widget / 'IslandSpeedWidget', widget / 'Info.plist')
+    required = (Path('IslandSpeed'), Path('Info.plist'), Path('pip-test.mp4'), widget / 'IslandSpeedWidget', widget / 'Info.plist')
     for relative in required:
         path = app / relative
         if not path.is_file() or path.stat().st_size == 0:
