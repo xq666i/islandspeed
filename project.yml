@@ -1,0 +1,56 @@
+name: IslandSpeed
+options:
+  deploymentTarget:
+    iOS: '16.2'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+    TARGETED_DEVICE_FAMILY: '1'
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  IslandSpeed:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Shared
+    dependencies:
+      - target: IslandSpeedWidget
+        embed: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: 灵动网速
+        UILaunchScreen: {}
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.islandspeed.local
+  IslandSpeedWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Widget
+      - Shared
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: 灵动网速
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.islandspeed.local.widget
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+schemes:
+  IslandSpeed:
+    build:
+      targets:
+        IslandSpeed: all
