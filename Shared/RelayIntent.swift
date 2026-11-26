@@ -1,4 +1,5 @@
 import AppIntents
+import ActivityKit
 import Foundation
 import CoreFoundation
 
@@ -7,6 +8,12 @@ import CoreFoundation
 enum RelaySignal {
     static var name: CFNotificationName {
         CFNotificationName(rawValue: "com.islandspeed.local.expanded-relay.v118" as CFString)
+    }
+    static var fallbackName: CFNotificationName {
+        CFNotificationName(rawValue: "com.islandspeed.local.button-fallback.v118" as CFString)
+    }
+    static func postButtonFallback() {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), fallbackName, nil, nil, true)
     }
     static func post() {
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), name, nil, nil, true)
@@ -19,19 +26,23 @@ struct RelayIslandIntent: LiveActivityIntent {
     static var description = IntentDescription("尝试更新网速实时活动并补足预约，不打开 App。")
     static var openAppWhenRun: Bool = false
 
-    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+    @Parameter(title: "当前活动标识") var activityID: String
+
+    init() { activityID = "" }
+    init(activityID: String) { self.activityID = activityID }
+
+    @MainActor func perform() async throws -> some IntentResult {
         #if ISLANDSPEED_APP
-        guard let monitor = SpeedMonitor.current, monitor.running else {
-            return .result(dialog: "网速监控进程未运行，请先打开 App 开始监控。")
+        // Request runs directly in the system-authorized intent execution path.
+        // Avoid an unstructured Task or a different monitor instance.
+        _ = await SpeedMonitor.shared.renewFromIntent(activityID: activityID) { attributes, content in
+            try Activity<SpeedAttributes>.request(attributes: attributes, content: content, pushType: nil)
         }
-        if await monitor.renewFromIntent() {
-            return .result(dialog: "已创建新活动；预约结果见诊断。")
-        }
-        return .result(dialog: "接力未完成，原活动保留或正在接力。")
         #else
-        // Same intent type is compiled into the widget for Button(intent:).
-        // LiveActivityIntent is expected to execute in the app process.
-        return .result(dialog: "请通过主 App 执行接力。")
+        // The system should dispatch LiveActivityIntent to the main app.
+        // Do not pretend that the extension can start a new Live Activity.
+        RelaySignal.postButtonFallback()
         #endif
+        return .result()
     }
 }

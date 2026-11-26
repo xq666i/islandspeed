@@ -1,8 +1,8 @@
 import SwiftUI
 import Foundation
 
-@main struct IslandSpeedApp: App {
-    @StateObject private var monitor = SpeedMonitor()
+@main @MainActor struct IslandSpeedApp: App {
+    @StateObject private var monitor = SpeedMonitor.shared
     var body: some Scene { WindowGroup { ContentView(monitor: monitor) } }
 }
 struct ContentView: View {
@@ -61,7 +61,7 @@ struct ContentView: View {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
                                 }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
                             }
-                            Text("默认自动探测系统允许的预约数量。到时启动可能有提示音或短暂双活动。点击立即接力会尝试重新补满。")
+                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会尝试重新补满。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
                                 Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
@@ -73,19 +73,12 @@ struct ContentView: View {
                         Toggle("长按自动接力实验", isOn: $monitor.expandRelay).disabled(monitor.running)
                         Text("仅尝试监听展开视图出现的信号；可能不触发、提前触发或被系统拒绝。运行满 60 秒才尝试，每个活动最多一次。请在开启监控前设置。")
                             .font(.footnote).foregroundStyle(.secondary)
-                        setting("更新额度恢复实验") {
-                            Picker("更新额度恢复实验", selection: $monitor.recoveryPause) {
-                                Text("关闭").tag(0)
-                                ForEach([15, 30, 60], id: \.self) { Text("停 \($0) 秒").tag($0) }
-                            }.labelsHidden().pickerStyle(.menu)
-                        }
-                        Text("开启后，每个活动每发起约 90 次更新暂停提交指定时长，采样继续；是否能恢复额度尚待测试。暂停期间显示旧值。")
-                            .font(.footnote).foregroundStyle(.secondary)
+
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("接力实验结果").font(.headline)
                         Text("本轮成功预约峰值：\(monitor.reservationPeak) 个").font(.subheadline.weight(.semibold))
-                        Text("当前待接力：\(monitor.pendingCount) 个 · 自动接力成功：\(monitor.relayCount) 次")
+                        Text("当前待接力：\(monitor.pendingCount)/4 个 · 自动接力成功：\(monitor.relayCount) 次")
                         Text("最近探测：\(monitor.reservationProbe)")
                         Text("最近预约失败：\(monitor.reservationFailure)").textSelection(.enabled)
                         Divider()
@@ -97,7 +90,10 @@ struct ContentView: View {
                         Text("0 次信号表示主程序没有收到展开信号，不代表没有长按。接力成功只表示创建新活动，实际刷新速度仍需观察。")
                             .foregroundStyle(.secondary)
                         Divider()
-                        Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次")
+                        Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次 · 失败 \(monitor.buttonFailures) 次")
+                        Text("执行阶段：\(monitor.buttonStage)")
+                        Text("当前活动 ID：\(monitor.currentActivityID)").textSelection(.enabled)
+                        Text("扩展侧 Intent 信号：\(monitor.buttonFallbackSignals) 次（正常应为0）")
                         Text(monitor.buttonResult)
                         Button("复制实验诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                         DisclosureGroup("接力事件记录（最近 \(monitor.relayEvents.count) 条）") {
@@ -126,7 +122,6 @@ struct ContentView: View {
                         Text("最近内容观察：\(stamp(monitor.observedAt))")
                         Text("预约接力：\(monitor.relayCount) 次 · 待启动 \(monitor.pendingCount) 个")
                         Text(monitor.relayStatus)
-                        Text("冷却剩余：\(monitor.cooldownRemaining) 秒")
                         Text("更新调用返回：\(monitor.submitCount) 次")
                         Text("最近采样：\(stamp(monitor.lastSample))")
                         Text("最近提交返回：\(stamp(monitor.lastSubmit))")

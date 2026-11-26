@@ -21,20 +21,43 @@ struct SpeedWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    detailed("下载", "arrow.down", context.state.down, .green, unavailable(context))
+                    detailed("下载", "arrow.down", context.state.down, .green, unavailable(context), expanded: true)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    detailed("上传", "arrow.up", context.state.up, .cyan, unavailable(context))
+                    detailed("上传", "arrow.up", context.state.up, .cyan, unavailable(context), expanded: true)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 4) {
-                        sampleInfo(context)
-                        if #available(iOS 17.0, *) {
-                            Button(intent: RelayIslandIntent()) {
-                                Label("立即接力", systemImage: "arrow.clockwise")
-                                    .font(.caption.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                            }.buttonStyle(.bordered).tint(.white)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            Text("更新 " + context.state.sampledAt.formatted(.dateTime.hour().minute().second()))
+                            Spacer(minLength: 4)
+                            Text("运行")
+                            Text(context.attributes.startedAt, style: .timer).monospacedDigit()
+                                .frame(minWidth: 30, alignment: .trailing)
+                        }.font(.system(size: 10)).foregroundStyle(.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                        HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("预约 \(context.state.pendingRelays ?? 0)/4 · 接力 \(context.state.totalRelays ?? 0)")
+                                if let next = context.state.nextRelay {
+                                    HStack(spacing: 3) {
+                                        Text("下次")
+                                        Text(timerInterval: min(context.attributes.startedAt, next)...next, countsDown: true)
+                                            .monospacedDigit()
+                                    }
+                                }
+                            }.font(.system(size: 10)).foregroundStyle(.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.75)
+                            Spacer(minLength: 4)
+                            if #available(iOS 17.0, *) {
+                                Button(intent: RelayIslandIntent(activityID: context.activityID)) {
+                                    Label("立即接力", systemImage: "arrow.clockwise")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .lineLimit(1).foregroundStyle(.white)
+                                        .padding(.horizontal, 10).frame(height: 28)
+                                        .background(.white.opacity(0.17), in: Capsule())
+                                }.buttonStyle(.plain)
+                            }
                         }
                     }.onAppear {
                         if context.attributes.expandRelay == true { RelaySignal.post() }
@@ -96,13 +119,13 @@ struct SpeedWidget: Widget {
             .foregroundStyle(.white).transaction { $0.animation = nil }
     }
 
-    private func detailed(_ title: String, _ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?) -> some View {
+    private func detailed(_ title: String, _ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?, expanded: Bool = false) -> some View {
         let p = RateText.parts(value)
-        return VStack(alignment: .leading, spacing: 3) {
-            Label(title, systemImage: icon).font(.caption).foregroundStyle(tint)
-            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: 21, weight: .semibold, design: .monospaced))
+        return VStack(alignment: .leading, spacing: expanded ? 1 : 3) {
+            Label(title, systemImage: icon).font(.system(size: expanded ? 11 : 12)).foregroundStyle(tint)
+            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: expanded ? 17 : 21, weight: .semibold, design: .monospaced))
                 .minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white).contentTransition(.identity)
-                .frame(width: 108, height: 26, alignment: .leading)
-        }.frame(width: 108, alignment: .leading).transaction { $0.animation = nil }
+                .frame(width: expanded ? 100 : 108, height: expanded ? 20 : 26, alignment: .leading)
+        }.frame(width: expanded ? 100 : 108, alignment: .leading).transaction { $0.animation = nil }
     }
 }
