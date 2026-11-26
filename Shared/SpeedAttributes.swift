@@ -12,7 +12,6 @@ struct SpeedAttributes: ActivityAttributes {
         var nextRelay: Date? = nil
     }
     var startedAt: Date
-    var expandRelay: Bool? = nil
 }
 
 enum RateText {

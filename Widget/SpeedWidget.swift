@@ -50,17 +50,21 @@ struct SpeedWidget: Widget {
                                 .lineLimit(1).minimumScaleFactor(0.75)
                             Spacer(minLength: 4)
                             if #available(iOS 17.0, *) {
+                                Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
+                                    Text("补约").font(.system(size: 11, weight: .semibold))
+                                        .lineLimit(1).foregroundStyle(.white)
+                                        .padding(.horizontal, 6).frame(height: 28)
+                                        .background(.white.opacity(0.17), in: Capsule())
+                                }.buttonStyle(.plain)
                                 Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
                                     Label("立即接力", systemImage: "arrow.clockwise")
                                         .font(.system(size: 12, weight: .semibold))
                                         .lineLimit(1).foregroundStyle(.white)
-                                        .padding(.horizontal, 10).frame(height: 28)
+                                        .padding(.horizontal, 6).frame(height: 28)
                                         .background(.white.opacity(0.17), in: Capsule())
                                 }.buttonStyle(.plain)
                             }
                         }
-                    }.onAppear {
-                        if context.attributes.expandRelay == true { RelaySignal.post() }
                     }
                 }
             } compactLeading: {

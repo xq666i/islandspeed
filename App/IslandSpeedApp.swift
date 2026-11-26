@@ -55,6 +55,7 @@ struct ContentView: View {
                         Divider()
                         Text("刷新时长实验").font(.headline)
                         Toggle("预定活动接力", isOn: $monitor.relayEnabled).disabled(monitor.running)
+                            .onChange(of: monitor.relayEnabled) { if $0 { monitor.localTimerEnabled = false } }
                         if monitor.relayEnabled {
                             setting("接力间隔") {
                                 Picker("接力间隔", selection: $monitor.relayInterval) {
@@ -70,9 +71,28 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        Toggle("长按自动接力实验", isOn: $monitor.expandRelay).disabled(monitor.running)
-                        Text("仅尝试监听展开视图出现的信号；可能不触发、提前触发或被系统拒绝。运行满 60 秒才尝试，每个活动最多一次。请在开启监控前设置。")
+                        Toggle("自行计时接力实验", isOn: $monitor.localTimerEnabled)
+                            .disabled(monitor.running || monitor.relayEnabled)
+                        Text("关闭预定活动接力后才能启用自行计时；后台达到设定间隔时尝试一次普通 Activity.request，失败后本活动不再重试。")
                             .font(.footnote).foregroundStyle(.secondary)
+                        if !monitor.relayEnabled {
+                            setting("自行计时间隔") {
+                                Picker("自行计时间隔", selection: $monitor.relayInterval) {
+                                    ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
+                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
+                            }
+                        }
+                        if monitor.relayEnabled {
+                            setting("预约权限实验时序") {
+                                Picker("预约权限实验时序", selection: $monitor.reservationTiming) {
+                                    Text("结束旧活动后").tag("afterEnd")
+                                    Text("即时创建前").tag("beforeCreate")
+                                    Text("即时创建后、结束旧活动前").tag("afterCreate")
+                                }.labelsHidden().pickerStyle(.menu)
+                            }
+                            Text("两种提前探测需最多2个旧预约，否则跳过提前探测，仍正常立即接力。灵动岛「补约」独立测试新增1个，不取消旧预约；满4个时跳过。返回前台不足4个自动补充。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
 
                     }
                     VStack(alignment: .leading, spacing: 10) {
@@ -83,13 +103,11 @@ struct ContentView: View {
                         Text("队列重置：\(monitor.queueResetStatus)").textSelection(.enabled)
                         Text("最近预约失败：\(monitor.reservationFailure)").textSelection(.enabled)
                         Divider()
-                        Text("长按自动接力实验").font(.subheadline.weight(.semibold))
-                        Text("展开信号 \(monitor.expandSignals) 次 · 跳过 \(monitor.expansionSkipped) 次")
-                        Text("接力尝试 \(monitor.expansionAttempts) 次 · 成功 \(monitor.expansionSuccesses) 次 · 失败 \(monitor.expansionFailures) 次")
-                        Text("最近信号：\(monitor.expansionResult)")
-                        Text("最近接力：\(monitor.expansionLastAttempt)")
-                        Text("0 次信号表示主程序没有收到展开信号，不代表没有长按。接力成功只表示创建新活动，实际刷新速度仍需观察。")
-                            .foregroundStyle(.secondary)
+                        Text("预约时序：\(monitor.timingResult)")
+                        Text("独立预约：\(monitor.standaloneAttempts) 次 · 成功 \(monitor.standaloneSuccesses) 次")
+                        Text(monitor.standaloneResult).textSelection(.enabled)
+                        Text("自行计时：\(monitor.timerAttempts) 次 · 成功 \(monitor.timerSuccesses) 次")
+                        Text(monitor.timerResult).textSelection(.enabled)
                         Divider()
                         Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次 · 失败 \(monitor.buttonFailures) 次 · 跳过 \(monitor.buttonSkipped) 次")
                         Text("执行阶段：\(monitor.buttonStage)")
@@ -114,7 +132,7 @@ struct ContentView: View {
                         Text("活动状态：\(monitor.activityState) · 当前间隔：\(monitor.effectiveInterval)s")
                         Text("活动已运行：\(monitor.activityAge) 秒 · 重建 \(monitor.renewCount) 次")
                         Text(monitor.renewStatus)
-                        Text("接力失败：\(monitor.renewFailures) 次 · 展开信号：\(monitor.expandSignals) 次")
+                        Text("接力失败：\(monitor.renewFailures) 次")
                         Text("更新调用发起：\(monitor.attemptCount) 次 · 最近返回耗时 \(String(format: "%.2f", monitor.lastLatency)) 秒")
                         Text("有效采样：\(monitor.sampleCount) 次")
                         Text("相同显示值跳过检查：\(monitor.unchangedChecks) 次")

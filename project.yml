@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.1.9'
-    CURRENT_PROJECT_VERSION: '13'
+    MARKETING_VERSION: '1.1.3'
+    CURRENT_PROJECT_VERSION: '7'
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -16,7 +16,7 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes: [quiet.wav, silence.wav, pip-test.mp4, PiPSession.swift, PiPPrivateExperiment.swift, RenewIslandIntent.swift]
+        excludes: [quiet.wav, silence.wav]
       - Shared
     dependencies:
       - target: IslandSpeedWidget
@@ -37,7 +37,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.islandspeed.local
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ISLANDSPEED_APP $(ISLANDSPEED_ROUTING_FLAG)"
   IslandSpeedWidget:
     type: app-extension
     platform: iOS
@@ -55,7 +54,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.islandspeed.local.widget
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) $(ISLANDSPEED_ROUTING_FLAG)"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
 schemes:
