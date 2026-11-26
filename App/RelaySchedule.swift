@@ -24,4 +24,13 @@ enum RelaySchedule {
         }
         return result
     }
+    // Return a single missing target and, only at capacity, the farthest
+    // obsolete pending date. A caller must verify cancellation before creating.
+    static func nextReplacement(desired: [Date], existing: [Date], capacity: Int) -> (date: Date, release: Date?)? {
+        let wanted = Set(desired)
+        let current = Set(existing)
+        guard let date = desired.first(where: { !current.contains($0) }) else { return nil }
+        let release = existing.count >= capacity ? existing.filter { !wanted.contains($0) }.max() : nil
+        return (date, release)
+    }
 }

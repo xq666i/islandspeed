@@ -39,11 +39,14 @@ struct SpeedWidget: Widget {
                         HStack(spacing: 6) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("预约 \(context.state.pendingRelays ?? 0)/4 · 接力 \(context.state.totalRelays ?? 0)")
-                                if let next = context.state.nextRelay {
-                                    HStack(spacing: 3) {
+                                HStack(spacing: 3) {
+                                    if let next = context.state.nextRelay {
                                         Text("下次")
                                         Text(timerInterval: min(context.attributes.startedAt, next)...next, countsDown: true)
                                             .monospacedDigit()
+                                    }
+                                    if let aligned = context.state.alignedRelays, aligned < 4 {
+                                        Text("重排 \(aligned)/4")
                                     }
                                 }
                             }.font(.system(size: 10)).foregroundStyle(.secondary)
@@ -51,14 +54,14 @@ struct SpeedWidget: Widget {
                             Spacer(minLength: 4)
                             if #available(iOS 17.0, *) {
                                 Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
-                                    Text("补约").font(.system(size: 11, weight: .semibold))
+                                    Text("重排预约").font(.system(size: 11, weight: .semibold))
                                         .lineLimit(1).foregroundStyle(.white)
                                         .padding(.horizontal, 6).frame(height: 28)
                                         .background(.white.opacity(0.17), in: Capsule())
                                 }.buttonStyle(.plain)
                                 Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
-                                    Label("立即接力", systemImage: "arrow.clockwise")
-                                        .font(.system(size: 12, weight: .semibold))
+                                    Text("立即接力")
+                                        .font(.system(size: 11, weight: .semibold))
                                         .lineLimit(1).foregroundStyle(.white)
                                         .padding(.horizontal, 6).frame(height: 28)
                                         .background(.white.opacity(0.17), in: Capsule())

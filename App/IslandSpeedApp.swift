@@ -18,7 +18,7 @@ struct ContentView: View {
                         rate("上传", "arrow.up", monitor.up, .cyan)
                     }
                     Group {
-                    Text("后台保活 · 对照实验").font(.headline)
+                    Text("后台运行").font(.headline)
                     Toggle("定位辅助", isOn: $monitor.useLocation)
                     Text("定位权限为可选，无需授权即可开启网速。允许定位后可辅助后台运行，不保存或上传坐标，可关闭精确位置。无定位辅助时系统可能较快暂停采样。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -53,61 +53,35 @@ struct ContentView: View {
                         }
                         Text(monitor.status).font(.subheadline)
                         Divider()
-                        Text("刷新时长实验").font(.headline)
+                        Text("自动接力").font(.headline)
                         Toggle("预定活动接力", isOn: $monitor.relayEnabled).disabled(monitor.running)
-                            .onChange(of: monitor.relayEnabled) { if $0 { monitor.localTimerEnabled = false } }
                         if monitor.relayEnabled {
                             setting("接力间隔") {
                                 Picker("接力间隔", selection: $monitor.relayInterval) {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
-                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.pendingCount > 0)
+                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
                             }
-                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会创建新活动；满额时先释放最远预约，成功申请新预约后逐步替换旧队列。")
+                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会创建新活动；满额时先释放最远预约，保留其余预约。长按展开后每点一次「重排预约」更新一个时间；返回 App 自动重排。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
-                                Button("补充预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
+                                Button("重排预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
                                 if monitor.pendingCount > 0 {
                                     Button("取消剩余预约") { monitor.cancelRelay() }.buttonStyle(.bordered)
                                 }
                             }
                         }
-                        Toggle("自行计时接力实验", isOn: $monitor.localTimerEnabled)
-                            .disabled(monitor.running || monitor.relayEnabled)
-                        Text("关闭预定活动接力后才能启用自行计时；后台达到设定间隔时尝试一次普通 Activity.request，失败后本活动不再重试。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                        if !monitor.relayEnabled {
-                            setting("自行计时间隔") {
-                                Picker("自行计时间隔", selection: $monitor.relayInterval) {
-                                    ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
-                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
-                            }
-                        }
-                        if monitor.relayEnabled {
-                            setting("预约权限实验时序") {
-                                Picker("预约权限实验时序", selection: $monitor.reservationTiming) {
-                                    Text("结束旧活动后").tag("afterEnd")
-                                    Text("即时创建前").tag("beforeCreate")
-                                    Text("即时创建后、结束旧活动前").tag("afterCreate")
-                                }.labelsHidden().pickerStyle(.menu)
-                            }
-                            Text("两种提前探测需最多2个旧预约，否则跳过提前探测，仍正常立即接力。灵动岛「补约」独立测试新增1个，不取消旧预约；满4个时跳过。返回前台不足4个自动补充。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
 
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("接力实验结果").font(.headline)
+                        Text("接力诊断").font(.headline)
                         Text("本轮成功预约峰值：\(monitor.reservationPeak) 个").font(.subheadline.weight(.semibold))
                         Text("当前待接力：\(monitor.pendingCount)/4 个 · 累计接力：\(monitor.relayCount + monitor.renewCount) 次")
                         Text("最近探测：\(monitor.reservationProbe)")
                         Text("队列重置：\(monitor.queueResetStatus)").textSelection(.enabled)
                         Text("最近预约失败：\(monitor.reservationFailure)").textSelection(.enabled)
                         Divider()
-                        Text("预约时序：\(monitor.timingResult)")
-                        Text("独立预约：\(monitor.standaloneAttempts) 次 · 成功 \(monitor.standaloneSuccesses) 次")
+                        Text("重排预约：\(monitor.standaloneAttempts) 次 · 成功 \(monitor.standaloneSuccesses) 次")
                         Text(monitor.standaloneResult).textSelection(.enabled)
-                        Text("自行计时：\(monitor.timerAttempts) 次 · 成功 \(monitor.timerSuccesses) 次")
-                        Text(monitor.timerResult).textSelection(.enabled)
                         Divider()
                         Text("按钮接力：\(monitor.buttonAttempts) 次 · 成功 \(monitor.buttonSuccesses) 次 · 失败 \(monitor.buttonFailures) 次 · 跳过 \(monitor.buttonSkipped) 次")
                         Text("执行阶段：\(monitor.buttonStage)")
@@ -115,7 +89,7 @@ struct ContentView: View {
                         Text("Intent 路由：\(monitor.intentRoutingMode)")
                         Text("扩展侧 Intent 信号：\(monitor.buttonFallbackSignals) 次（转发尝试，非授权路径）")
                         Text(monitor.buttonResult)
-                        Button("复制实验诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
+                        Button("复制诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                         DisclosureGroup("接力事件记录（最近 \(monitor.relayEvents.count) 条）") {
                             ForEach(Array(monitor.relayEvents.suffix(120).reversed().enumerated()), id: \.offset) { entry in
                                 Text(entry.element).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
@@ -147,7 +121,7 @@ struct ContentView: View {
                         Text("最近提交返回：\(stamp(monitor.lastSubmit))")
                         Text("最近循环中断：\(String(format: "%.1f", monitor.lastGap)) 秒")
                         Text(monitor.backgroundReport)
-                        Button("复制实验诊断") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
+                        Button("复制诊断") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                     }.font(.footnote).monospacedDigit()
                     Text("每 0.25 秒采样，最近 4 个有效样本平均。仅在实际显示值变化时按选定最短间隔提交；不发相同读数心跳。更新调用返回不等于系统已渲染。长按网速卡可查看样本编号。")
                         .font(.footnote).foregroundStyle(.secondary)

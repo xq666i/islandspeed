@@ -10,6 +10,7 @@ struct SpeedAttributes: ActivityAttributes {
         var pendingRelays: Int? = nil
         var totalRelays: Int? = nil
         var nextRelay: Date? = nil
+        var alignedRelays: Int? = nil
     }
     var startedAt: Date
 }
