@@ -17,7 +17,8 @@ struct ContentView: View {
                         rate("下载", "arrow.down", monitor.down, .green)
                         rate("上传", "arrow.up", monitor.up, .cyan)
                     }
-                    Text("后台定位 · 实验模式").font(.headline)
+                    Text("后台保活 · 对照实验").font(.headline)
+                    Toggle("定位辅助", isOn: $monitor.useLocation)
                     Text("定位权限为可选，无需授权即可开启网速。允许定位后可辅助后台运行，不保存或上传坐标，可关闭精确位置。无定位辅助时系统可能较快暂停采样。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("权限：\(monitor.permission)").font(.subheadline)
@@ -36,8 +37,20 @@ struct ContentView: View {
                         Text(monitor.running ? "停止灵动岛网速" : "开启灵动岛网速")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }.buttonStyle(.borderedProminent).disabled(busy)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PiP 画中画辅助 · 实验").font(.headline)
+                        Picker("请求高度", selection: $monitor.pipHeight) {
+                            Text("0.1 pt").tag(0.1); Text("1 pt").tag(1.0); Text("40 pt").tag(40.0)
+                        }.pickerStyle(.segmented)
+                            .onChange(of: monitor.pipHeight) { _ in monitor.changePiPHeight() }
+                        Button(monitor.pipOccupied ? "停止画中画辅助" : "开启画中画辅助") { monitor.togglePiP() }
+                            .buttonStyle(.bordered).disabled(!monitor.running)
+                        Text(monitor.pipStatus).font(.footnote)
+                        Text("系统可能限制最小窗口或显示控件。不开启 PiP 不影响网速监控。建议先用 40 pt 验证启动，再缩至 0.1 pt。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     Picker("提交间隔", selection: $monitor.refreshInterval) {
-                        Text("1 秒").tag(1); Text("2 秒").tag(2); Text("3 秒").tag(3)
+                        Text("1s").tag(1); Text("2s").tag(2); Text("3s").tag(3); Text("5s").tag(5)
                     }.pickerStyle(.segmented)
                     Toggle("60 秒活动续期实验", isOn: $monitor.autoRenew)
                     if monitor.running {
@@ -47,6 +60,8 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("后台诊断").font(.headline)
                         Text("定位：\(monitor.locationStatus)")
+                        Text("PiP 回调：\(monitor.pipFrames) 次")
+                        Text(monitor.pipBackgroundReport)
                         Text("活动已运行：\(monitor.activityAge) 秒 · 重建 \(monitor.renewCount) 次")
                         Text(monitor.renewStatus)
                         Text("更新调用发起：\(monitor.attemptCount) 次 · 最近返回耗时 \(String(format: "%.2f", monitor.lastLatency)) 秒")

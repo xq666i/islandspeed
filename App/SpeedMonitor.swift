@@ -28,6 +28,14 @@ import UIKit
     @Published private(set) var activityAge = 0
     @Published private(set) var lastLatency = 0.0
     @Published private(set) var attemptCount = 0
+    @Published var useLocation = true { didSet { refreshLocation() } }
+    @Published var pipHeight = 0.1
+    @Published private(set) var pipStatus = "未开启"
+    @Published private(set) var pipOccupied = false
+    @Published private(set) var pipFrames = 0
+    @Published private(set) var pipBackgroundReport = "尚未测试"
+    private var pipBaseline = 0
+    private let pip = PiPSession()
     private let location = LocationSession()
     private var activityStarted: ContinuousClock.Instant?
     private var lastAttempt: ContinuousClock.Instant?
@@ -51,8 +59,17 @@ import UIKit
 
     init() {
         location.onChange = { [weak self] in self?.refreshLocation() }
+        pip.onChange = { [weak self] in self?.refreshPiP() }
         refreshLocation()
     }
+    private func refreshPiP() {
+        pipStatus = pip.status; pipOccupied = pip.occupied; pipFrames = pip.frames
+    }
+    func togglePiP() {
+        if pip.occupied { pip.stop() }
+        else if running { pip.start(height: pipHeight) }
+    }
+    func changePiPHeight() { pip.setHeight(pipHeight) }
     func requestPermission() {
         switch location.authorization {
         case .notDetermined:
@@ -97,13 +114,14 @@ import UIKit
         if let error = location.error, location.active { locationStatus = error }
         else if let date = location.lastEvent, location.active { locationStatus = "最近定位回调：\(date.formatted(.dateTime.hour().minute().second()))" }
         else if location.active { locationStatus = "定位服务已启动，等待回调" }
+        else if running && !useLocation { locationStatus = "定位辅助已关闭" }
         else if running && !location.canUseLocation { locationStatus = "无定位辅助，切换到后台后可能暂停采样" }
         else { locationStatus = "未开启" }
         // Location assistance is optional and must never end an active Live Activity.
         // Start only in the foreground; authorization changes can arrive during a system prompt.
-        if running && location.canUseLocation && !location.active && UIApplication.shared.applicationState == .active {
+        if running && useLocation && location.canUseLocation && !location.active && UIApplication.shared.applicationState == .active {
             location.start()
-        } else if location.active && (!running || !location.canUseLocation) {
+        } else if location.active && (!running || !useLocation || !location.canUseLocation) {
             location.stop()
         }
     }
@@ -184,7 +202,7 @@ import UIKit
         let now = ContinuousClock.now
         if let start = activityStarted {
             let age = Int(max(0, seconds(start.duration(to: now))))
-            if age != activityAge { activityAge = age }
+            if age != activityAge { activityAge = age; pipFrames = pip.frames }
             if autoRenew, start.duration(to: now) >= Self.renewalAge,
                UIApplication.shared.applicationState == .background, !backgroundRenewDenied {
                 renew(force: false)
@@ -256,18 +274,19 @@ import UIKit
         let previous = retiring; retiring = nil
         sessionID = UUID()
         location.stop()
+        pip.stop()
         Task {
             if let old { await old.end(nil, dismissalPolicy: .immediate) }
             if let previous { await previous.end(nil, dismissalPolicy: .immediate) }
         }
     }
     func sceneChanged(_ phase: ScenePhase) {
-        if phase == .background, running, baseline == nil { baseline = (sampleCount, submitCount, Date()) }
+        if phase == .background, running, baseline == nil { baseline = (sampleCount, submitCount, Date()); pipBaseline = pip.frames }
         if phase == .active {
             refreshLocation()
             // UIKit's active state may lag the SwiftUI scene callback briefly.
             // Retry the optional assistance after the scene becomes active.
-            if running && location.canUseLocation && !location.active {
+            if running && useLocation && location.canUseLocation && !location.active {
                 Task { @MainActor [weak self] in
                     await Task.yield()
                     self?.refreshLocation()
@@ -275,6 +294,7 @@ import UIKit
             }
             if let baseline {
                 backgroundReport = "离开 \(Int(max(0, Date().timeIntervalSince(baseline.date)))) 秒：新增 \(sampleCount - baseline.samples) 个样本，\(submitCount - baseline.submits) 次更新调用返回"
+                pipBackgroundReport = "离开期间新增 PiP 回调：\(max(0, pip.frames - pipBaseline)) 次；当前\(pip.active ? "运行" : (pip.suspended ? "挂起" : "未激活"))"
                 self.baseline = nil
                 if running, autoRenew, let start = activityStarted,
                    start.duration(to: .now) >= Self.renewalAge { renew(force: true) }

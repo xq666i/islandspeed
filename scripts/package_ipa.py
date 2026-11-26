@@ -17,8 +17,8 @@ def package(app: Path, output: Path) -> None:
             raise ValueError(f'构建产物缺少文件：{path}')
     with (app / 'Info.plist').open('rb') as stream:
         info = plistlib.load(stream)
-    if info.get('UIBackgroundModes') != ['location'] or info.get('BGTaskSchedulerPermittedIdentifiers'):
-        raise ValueError('后台模式必须仅为 location，不得保留后台测量任务标识')
+    if set(info.get('UIBackgroundModes', [])) != {'location', 'audio'} or info.get('BGTaskSchedulerPermittedIdentifiers'):
+        raise ValueError('后台模式必须为 location 和 audio，不得保留后台测量任务标识')
     for key in ('NSLocationWhenInUseUsageDescription', 'NSLocationAlwaysAndWhenInUseUsageDescription', 'NSSupportsLiveActivities'):
         if not info.get(key):
             raise ValueError(f'缺少 Info.plist 配置：{key}')
