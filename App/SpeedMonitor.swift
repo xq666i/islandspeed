@@ -21,7 +21,7 @@ import UIKit
     @Published private(set) var lastSubmit: Date?
     @Published private(set) var lastGap: Double = 0
     @Published private(set) var backgroundReport = "尚未进行后台测试"
-    @Published var refreshInterval = 1 { didSet { saveSession() } }
+    @Published var refreshInterval = 1 { didSet { savePreferences() } }
     static let shared = SpeedMonitor()
     @Published private(set) var renewFailures = 0
     @Published private(set) var reservationPeak = 0
@@ -73,10 +73,13 @@ import UIKit
         if #available(iOS 26.0, *) { return true }
         return false
     }
-    @Published var relayEnabled = SpeedMonitor.supportsReservations
-    @Published var relayInterval = RelaySchedule.defaultInterval
+    @Published var relayEnabled = SpeedMonitor.supportsReservations { didSet { savePreferences() } }
+    @Published var relayInterval = RelaySchedule.defaultInterval { didSet { savePreferences() } }
     @Published private(set) var relayStatus = "未预约"
-    @Published private(set) var pendingCount = 0
+    @Published private(set) var appointmentDates: [Date] = []
+    var pendingCount: Int { appointmentDates.count }
+    var queueIsReady: Bool { pendingCount == RelaySchedule.capacity && retiringAppointments.isEmpty }
+    var arrangingAppointments: Bool { starting || editing || foregroundMaintenance != nil || foregroundRecoveryRequest != nil }
     @Published private(set) var relayCount = 0
     @Published private(set) var observedCount = 0
     @Published private(set) var observedAt: Date?
@@ -87,11 +90,17 @@ import UIKit
     typealias Snapshot = ActivityContent<SpeedAttributes.ContentState>
     private var activity: Island?
     var currentActivityID: String { activity?.id ?? "无" }
-    @Published var useLocation = true { didSet { refreshLocation(); saveSession() } }
+    @Published var useLocation = true {
+        didSet {
+            if !applyingPreferences { refreshLocation() }
+            savePreferences()
+        }
+    }
     private let location = LocationSession()
+    var canUseLocation: Bool { location.canUseLocation }
     private var sessionID = UUID()
     @Published private(set) var starting = false
-    private var editing = false
+    @Published private(set) var editing = false
     private static let renewalCooldownSeconds = 3
     private var lastManualRenew: ContinuousClock.Instant?
     private var knownPendingLimit = RelaySchedule.capacity
@@ -108,8 +117,8 @@ import UIKit
     private var foregroundWork: Task<Void, Never>?
     private var sceneIsActive = false
     private enum ForegroundMaintenance: Equatable { case reset, refill }
-    private var foregroundMaintenance: ForegroundMaintenance?
-    private var foregroundRecoveryRequest: String?
+    @Published private var foregroundMaintenance: ForegroundMaintenance?
+    @Published private var foregroundRecoveryRequest: String?
     private var retiringAppointments: Set<String> = []
     private var recoveryActivityID: String?
     private var baseline: (samples: Int, submits: Int, date: Date)?
@@ -134,10 +143,42 @@ import UIKit
         let recoveryActivityID: String?
     }
     private static let sessionKey = "IslandSpeed.monitoringSession.v122"
+    private static let preferencesKey = "IslandSpeed.monitorPreferences"
+    private var applyingPreferences = false
+
+    private struct Preferences: Codable {
+        let refresh: Int
+        let interval: Int
+        let relayEnabled: Bool
+        let location: Bool
+    }
 
     private init() {
+        if let data = UserDefaults.standard.data(forKey: Self.preferencesKey),
+           let preferences = try? JSONDecoder().decode(Preferences.self, from: data) {
+            applyPreferences(preferences, restoringSession: false)
+        }
         location.onChange = { [weak self] in self?.refreshLocation() }
         refreshLocation()
+    }
+
+    private func applyPreferences(_ preferences: Preferences, restoringSession: Bool) {
+        applyingPreferences = true
+        defer { applyingPreferences = false }
+        refreshInterval = max(1, min(15, preferences.refresh))
+        let minimum = restoringSession ? 60 : RelaySchedule.minimumInterval
+        relayInterval = max(minimum, min(RelaySchedule.maximumInterval, preferences.interval))
+        relayEnabled = preferences.relayEnabled && Self.supportsReservations
+        useLocation = preferences.location
+    }
+
+    private func savePreferences() {
+        guard !applyingPreferences else { return }
+        let preferences = Preferences(refresh: refreshInterval, interval: relayInterval, relayEnabled: relayEnabled, location: useLocation)
+        if let data = try? JSONEncoder().encode(preferences) {
+            UserDefaults.standard.set(data, forKey: Self.preferencesKey)
+        }
+        saveSession()
     }
 
     func requestPermission() {
@@ -224,10 +265,8 @@ import UIKit
             return false
         }
         sessionID = saved.id
-        refreshInterval = max(1, min(15, saved.refresh))
-        relayInterval = max(60, saved.interval)
-        relayEnabled = saved.relayEnabled && Self.supportsReservations
-        useLocation = saved.location
+        applyPreferences(.init(refresh: saved.refresh, interval: saved.interval,
+                               relayEnabled: saved.relayEnabled, location: saved.location), restoringSession: true)
         renewCount = saved.renewals
         relayCount = saved.relays
         let current = candidates.last
@@ -432,7 +471,8 @@ import UIKit
     private func refreshQueueStatus() {
         let pending = pendingAppointments
         retiringAppointments.formIntersection(pending.map(\.id))
-        pendingCount = pending.count
+        let dates = pending.map { $0.attributes.startedAt }
+        if appointmentDates != dates { appointmentDates = dates }
         reservationPeak = max(reservationPeak, pendingCount)
         let matched = activity.map { plan(for: $0.attributes.startedAt, pending: pending).matched } ?? 0
         queueResetStatus = relayEnabled ? "重排进度 \(matched)/4" : "预约已关闭"
@@ -776,7 +816,7 @@ import UIKit
         bind(nil)
         if let old { _ = endActivity(old) }
         for item in scheduled { _ = endActivity(item) }
-        scheduled.removeAll(); pendingCount = 0
+        scheduled.removeAll(); appointmentDates = []
         location.stop(); hasReading = false; lastValid = nil
         status = reason; activityState = "已停止"; relayStatus = "预约已取消"
         recordRelay("停止监控：\(reason)")

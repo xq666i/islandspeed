@@ -3,8 +3,9 @@ import Foundation
 enum RelaySchedule {
     static let capacity = 4
     static let minimumInterval = 120
-    static let defaultInterval = 180
-    static let intervalOptions = Array(stride(from: minimumInterval, through: 300, by: 30))
+    static let maximumInterval = 300
+    static let defaultInterval = 240
+    static let intervalOptions = Array(stride(from: minimumInterval, through: maximumInterval, by: 30))
 
     // The grid belongs to the active activity, even after a delayed wake.
     static func dates(anchor: Date, interval: Int, now: Date) -> [Date] {

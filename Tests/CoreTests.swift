@@ -36,7 +36,9 @@ import Foundation
         precondition(limited.matched == 1 && limited.next == dates[1] && limited.release == anchor)
         precondition(RelaySchedule.plan(desired: dates, existing: dates).next == nil)
         precondition(RelaySchedule.intervalOptions == [120, 150, 180, 210, 240, 270, 300])
-        precondition(RelaySchedule.intervalOptions.contains(RelaySchedule.defaultInterval))
+        precondition(RelaySchedule.defaultInterval == 240)
+        let defaultDates = RelaySchedule.dates(anchor: anchor, interval: RelaySchedule.defaultInterval, now: anchor)
+        precondition(defaultDates == [240, 480, 720, 960].map { anchor.addingTimeInterval(Double($0)) })
 
         func at(_ offset: Double) -> Date { anchor.addingTimeInterval(offset) }
         let renewedAt = at(30)
