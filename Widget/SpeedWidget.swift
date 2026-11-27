@@ -10,6 +10,7 @@ import WidgetKit
 
 struct SpeedWidget: Widget {
     private static let clockFormat = Date.FormatStyle(date: .omitted, time: .standard, locale: Locale(identifier: "en_GB"))
+    private static let timingColumnWidth: CGFloat = 86
 
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SpeedAttributes.self) { context in
@@ -84,22 +85,16 @@ struct SpeedWidget: Widget {
         return VStack(spacing: 1) {
             HStack(spacing: 8) {
                 stableText(reading).frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 4) {
-                    Text("运行")
-                    Text(context.attributes.startedAt, style: .timer)
-                        .monospacedDigit().frame(width: 57, alignment: .trailing)
-                }
+                timingRow("运行", value: Text(context.attributes.startedAt, style: .timer))
             }
             HStack(spacing: 8) {
                 stableText(reservations).frame(maxWidth: .infinity, alignment: .leading)
                 if let next = state.nextRelay {
-                    HStack(spacing: 4) {
-                        Text("下次")
-                        Text(timerInterval: min(context.attributes.startedAt, next)...next, countsDown: true, showsHours: false)
-                            .monospacedDigit().frame(width: 57, alignment: .trailing)
-                    }
-                } else if queueEnabled && count == 0 {
+                    timingRow("下次", value: Text(timerInterval: min(context.attributes.startedAt, next)...next,
+                                                 countsDown: true, showsHours: false))
+                } else if queueEnabled && state.pendingRelays == 0 {
                     Text("预约已用完")
+                        .frame(width: Self.timingColumnWidth, alignment: .leading)
                 }
             }
         }
@@ -107,6 +102,15 @@ struct SpeedWidget: Widget {
         .foregroundStyle(IslandPalette.secondary)
         .lineLimit(1)
         .minimumScaleFactor(0.75)
+    }
+
+    private func timingRow(_ title: String, value: Text) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(title).fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 4)
+            value.monospacedDigit().frame(width: 57, alignment: .trailing)
+        }
+        .frame(width: Self.timingColumnWidth, alignment: .leading)
     }
 
     private func lastUpdated(_ context: ActivityViewContext<SpeedAttributes>, onLockScreen: Bool) -> String {
@@ -121,22 +125,23 @@ struct SpeedWidget: Widget {
 
     @available(iOS 17.0, *)
     private func relayActions(_ context: ActivityViewContext<SpeedAttributes>) -> some View {
+        let relayEnabled = context.state.alignedRelays != nil
         HStack(spacing: 8) {
-            if #available(iOS 26.0, *), context.state.alignedRelays != nil {
+            if #available(iOS 26.0, *), relayEnabled {
                 let full = (context.state.pendingRelays ?? 0) >= 4
                 Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
                     RelayPill(title: full ? "预约已满" : "新增预约")
                 }
                 .disabled(full)
             }
-            if context.state.alignedRelays != nil, context.state.pendingRelays == 0,
+            if relayEnabled, context.state.pendingRelays == 0,
                let url = RelayRecoveryLink.url(activityID: context.activityID) {
                 Link(destination: url) {
                     RelayPill(title: "打开并补齐")
                 }
             } else {
                 Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
-                    RelayPill(title: "立即接力")
+                    RelayPill(title: relayEnabled ? "立即接力" : "刷新")
                 }
             }
         }
@@ -161,7 +166,6 @@ struct SpeedWidget: Widget {
                 .frame(width: 10, height: 12)
             VStack(alignment: .leading, spacing: 0) {
                 stableText(number)
-                    .foregroundStyle(unavailable == nil ? tint : IslandPalette.text)
                     .font(.system(size: minimal ? 11 : 12, weight: .semibold, design: .monospaced))
                     .minimumScaleFactor(0.6).lineLimit(1)
                     .frame(width: column, height: 14, alignment: .leading)

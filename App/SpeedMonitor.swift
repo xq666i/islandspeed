@@ -95,6 +95,7 @@ import UIKit
     typealias Island = Activity<SpeedAttributes>
     typealias Snapshot = ActivityContent<SpeedAttributes.ContentState>
     private var activity: Island?
+    private var stagingManualActivity: Island?
     var currentActivityID: String { activity?.id ?? "无" }
     @Published var useLocation = true {
         didSet {
@@ -108,6 +109,7 @@ import UIKit
     @Published private(set) var starting = false
     @Published private(set) var editing = false
     private static let renewalCooldownSeconds = 3
+    private static let regularRelevanceScore = 50.0
     private var lastManualRenew: ContinuousClock.Instant?
     private var knownPendingLimit = RelaySchedule.capacity
     private var releasedSlotActivityID: String?
@@ -312,11 +314,12 @@ import UIKit
         guard UIApplication.shared.applicationState == .active else { status = "请在前台开启网速"; return }
         sessionID = UUID()
         let date = Date()
-        let initial = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0)
+        let initial = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0,
+                                                   alignedRelays: relayEnabled ? 0 : nil)
         let new: Island
         do {
             new = try Island.request(attributes: .init(sessionID: sessionID, startedAt: date),
-                content: Snapshot(state: initial, staleDate: nil, relevanceScore: 100), pushType: nil)
+                content: snapshot(initial), pushType: nil)
         } catch { status = "实时活动启动失败：\(error.localizedDescription)"; return }
         down = 0; up = 0; sampleCount = 0; submitCount = 0
         lastSample = nil; lastSubmit = nil; lastGap = 0; baseline = nil
@@ -399,11 +402,11 @@ import UIKit
         let d = RateText.parts(down), u = RateText.parts(up)
         return "↓ \(d.0) \(d.1) | ↑ \(u.0) \(u.1)"
     }
-    private func snapshot(_ state: SpeedAttributes.ContentState) -> Snapshot {
+    private func snapshot(_ state: SpeedAttributes.ContentState, relevanceScore: Double? = nil) -> Snapshot {
         // One keepalive per minute of valid, unchanged readings lets an
         // interrupted measurement expire without paying for per-second heartbeats.
         Snapshot(state: state, staleDate: state.sampleNumber == 0 ? nil : state.sampledAt.addingTimeInterval(90),
-                 relevanceScore: 100)
+                 relevanceScore: relevanceScore ?? Self.regularRelevanceScore)
     }
 
     private func controlUpdates(at scheduledTick: ContinuousClock.Instant) {
@@ -438,7 +441,8 @@ import UIKit
         }
         if hasRecentReading && label != formattedPair(down, up) { suppressedCount += 1 }
         let token = sessionID
-        let content = snapshot(state)
+        // Preserve the priority assigned at creation through subsequent updates.
+        let content = snapshot(state, relevanceScore: activity.content.relevanceScore)
         // Order content revisions (including queue-only changes) separately from
         // the sample timestamp shown in the UI.
         let timestamp = Date()
@@ -587,6 +591,34 @@ import UIKit
         } while ContinuousClock.now < deadline
         return sessionID == token && !Task.isCancelled && targets.allSatisfy(isTerminal)
     }
+
+    private func confirmManualReplacement(_ replacement: Island, token: UUID) async -> Bool {
+        stagingManualActivity = replacement
+        defer {
+            if stagingManualActivity?.id == replacement.id { stagingManualActivity = nil }
+        }
+        let previous = activity
+        func canContinue() -> Bool {
+            running && sessionID == token && activity?.id == previous?.id
+                && previous?.activityState != .dismissed && !Task.isCancelled && !isTerminal(replacement)
+        }
+
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(750))
+        while canContinue(), !isLive(replacement), ContinuousClock.now < deadline {
+            do { try await Task.sleep(for: .milliseconds(25)) }
+            catch { return false }
+        }
+        guard canContinue(), isLive(replacement) else { return false }
+
+        // ActivityKit's active state is available before we can know what the island has rendered.
+        // Keep its predecessor briefly while the system can switch to the higher-priority card.
+        if previous.map(isLive) == true {
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return false }
+        }
+        return canContinue() && isLive(replacement)
+    }
+
     private func isCurrent(_ token: UUID, _ id: String) -> Bool {
         running && sessionID == token && activity?.id == id && activity.map(isLive) == true
     }
@@ -633,13 +665,14 @@ import UIKit
                        resettingQueue: Bool = false) async -> Bool {
         reconcile()
         let fromIntent = request != nil
+        let operation = fromIntent && !relayEnabled ? "刷新" : "接力"
         let old = activity
         guard running, !editing, old.map(isLive) ?? resettingQueue,
               fromIntent || (!Task.isCancelled && UIApplication.shared.applicationState == .active) else {
-            renewStatus = "接力处理中或当前活动不可用"; return false
+            renewStatus = "\(operation)处理中或当前活动不可用"; return false
         }
         if let lastManualRenew, lastManualRenew.duration(to: .now) < .seconds(Self.renewalCooldownSeconds) {
-            renewStatus = "请在上次接力三秒后重试"; return false
+            renewStatus = "请在上次操作三秒后重试"; return false
         }
         lastManualRenew = .now
         let token = sessionID
@@ -663,9 +696,14 @@ import UIKit
             let anchor = Date()
             let state = readState(pending: pendingAppointments, anchor: anchor, total: renewCount + relayCount + 1)
             let attrs = SpeedAttributes(sessionID: token, startedAt: anchor)
-            let content = snapshot(state)
-            if let request { return (try request(attrs, content), state) }
-            return (try Island.request(attributes: attrs, content: content, pushType: nil), state)
+            if let request {
+                // With equal scores the system prefers the older card. Leave room
+                // above the regular score for a newly requested manual replacement.
+                let oldScore = old?.content.relevanceScore ?? Self.regularRelevanceScore
+                let score = min(100, max(Self.regularRelevanceScore, oldScore) + 1)
+                return (try request(attrs, snapshot(state, relevanceScore: score)), state)
+            }
+            return (try Island.request(attributes: attrs, content: snapshot(state), pushType: nil), state)
         }
         if fromIntent, !pendingAppointments.isEmpty, pendingAppointments.count >= knownPendingLimit {
             guard await freeSlot(), canReplaceCurrent() else {
@@ -682,12 +720,26 @@ import UIKit
                       await freeSlot(), canReplaceCurrent(), !Task.isCancelled, UIApplication.shared.applicationState == .active else { throw error }
                 (new, initial) = try create()
             }
+            if fromIntent {
+                recordRelay("按钮\(operation)已请求新活动 \(new.id)，初始状态 \(new.activityState)")
+                guard await confirmManualReplacement(new, token: token),
+                      running, sessionID == token, activity?.id == old?.id,
+                      old?.activityState != .dismissed, !Task.isCancelled, isLive(new) else {
+                    _ = endActivity(new)
+                    if running, sessionID == token {
+                        renewFailures += 1
+                        renewStatus = "新活动未能接管，已撤销本次\(operation)"
+                        recordRelay("\(renewStatus)：\(new.id)，状态 \(new.activityState)")
+                    }
+                    return false
+                }
+            }
             bind(new); renewCount += 1; lastState = initial; lastAttempt = .now
             if recoveringQueue { recoveryActivityID = new.id }
             lastPublishedValue = key(initial)
-            renewStatus = "\(source)接力成功"; status = "监控中"
+            renewStatus = "\(source)\(operation)成功"; status = "监控中"
             saveSession(); refreshQueueStatus()
-            recordRelay("\(source)接力：\(old?.id ?? "等待中") → \(new.id)")
+            recordRelay("\(source)\(operation)：\(old?.id ?? "等待中") → \(new.id)，新活动状态 \(new.activityState)")
             if let old { _ = endActivity(old) }
             if !fromIntent && canScheduleReservations {
                 _ = await editReservations(for: new, token: token, endingActivity: old)
@@ -695,7 +747,7 @@ import UIKit
             return true
         } catch {
             if sessionID == token {
-                renewFailures += 1; renewStatus = "\(source)接力失败，保留当前网速：\(error.localizedDescription)"
+                renewFailures += 1; renewStatus = "\(source)\(operation)失败，保留当前网速：\(error.localizedDescription)"
                 recordRelay("\(renewStatus) · \(errorDetail(error))")
                 refreshQueueStatus()
             }
@@ -706,7 +758,7 @@ import UIKit
     @available(iOS 26.0, *)
     private func appendReservation(at date: Date, token: UUID, request: ReservationRequest? = nil) throws {
         let attributes = SpeedAttributes(sessionID: token, startedAt: date)
-        let blank = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0)
+        let blank = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0, alignedRelays: 0)
         let content = snapshot(blank)
         let alert = AlertConfiguration(title: "灵动网速", body: "预约的网速活动已启动", sound: .default)
         let next: Island
@@ -822,6 +874,7 @@ import UIKit
     func setRelayEnabled(_ enabled: Bool) {
         guard Self.supportsReservations, relayEnabled != enabled, !clearingAppointments else { return }
         relayEnabled = enabled
+        lastCheckDue = nil
         if enabled { scheduleRelay() }
         else { clearReservations() }
     }
@@ -889,6 +942,10 @@ import UIKit
         let old = activity
         bind(nil)
         if let old { _ = endActivity(old) }
+        if let candidate = stagingManualActivity {
+            stagingManualActivity = nil
+            _ = endActivity(candidate)
+        }
         for item in scheduled { _ = endActivity(item) }
         scheduled.removeAll(); appointmentDates = []
         location.stop(); hasReading = false; lastValid = nil
