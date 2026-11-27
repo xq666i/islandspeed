@@ -126,7 +126,7 @@ struct SpeedWidget: Widget {
     @available(iOS 17.0, *)
     private func relayActions(_ context: ActivityViewContext<SpeedAttributes>) -> some View {
         let relayEnabled = context.state.alignedRelays != nil
-        HStack(spacing: 8) {
+        return HStack(spacing: 8) {
             if #available(iOS 26.0, *), relayEnabled {
                 let full = (context.state.pendingRelays ?? 0) >= 4
                 Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
