@@ -117,6 +117,7 @@ import UIKit
     private let location = LocationSession()
     var canUseLocation: Bool { location.canUseLocation }
     private var sessionID = UUID()
+    private var monitoringStartedAt: Date?
     @Published private(set) var starting = false
     @Published private(set) var editing = false
     private static let renewalCooldownSeconds = 3
@@ -152,6 +153,7 @@ import UIKit
 
     private struct SavedSession: Codable {
         let id: UUID
+        let monitoringStartedAt: Date?
         let currentID: String?
         let renewals: Int
         let relays: Int
@@ -257,7 +259,8 @@ import UIKit
     }
     private func saveSession() {
         guard running else { return }
-        let saved = SavedSession(id: sessionID, currentID: activity?.id, renewals: renewCount,
+        let saved = SavedSession(id: sessionID, monitoringStartedAt: monitoringStartedAt,
+            currentID: activity?.id, renewals: renewCount,
             relays: relayCount, refresh: refreshInterval, interval: relayInterval,
             relayEnabled: relayEnabled, location: useLocation, recoveryActivityID: recoveryActivityID)
         if let data = try? JSONEncoder().encode(saved) {
@@ -284,6 +287,13 @@ import UIKit
             return false
         }
         sessionID = saved.id
+        monitoringStartedAt = saved.monitoringStartedAt
+            ?? owned.lazy.compactMap { $0.attributes.monitoringStartedAt }.first
+        // An older build recorded only the card's timestamp. It matches the
+        // session start if the previously bound card is still the original.
+        if monitoringStartedAt == nil, saved.renewals == 0, saved.relays == 0 {
+            monitoringStartedAt = candidates.first { $0.id == saved.currentID }?.attributes.startedAt
+        }
         applyPreferences(.init(refresh: saved.refresh, interval: saved.interval,
                                relayEnabled: saved.relayEnabled, location: saved.location), restoringSession: true)
         renewCount = saved.renewals
@@ -330,9 +340,10 @@ import UIKit
         let new: Island
         do {
             new = try Island.request(attributes: .init(sessionID: sessionID, startedAt: date,
-                                                      buildIdentifier: Self.buildIdentifier),
+                                                      buildIdentifier: Self.buildIdentifier, monitoringStartedAt: date),
                 content: snapshot(initial), pushType: nil)
         } catch { status = "实时活动启动失败：\(error.localizedDescription)"; return }
+        monitoringStartedAt = date
         down = 0; up = 0; sampleCount = 0; submitCount = 0
         lastSample = nil; lastSubmit = nil; lastGap = 0; baseline = nil
         renewCount = 0; relayCount = 0; renewFailures = 0
@@ -677,7 +688,7 @@ import UIKit
                        resettingQueue: Bool = false) async -> Bool {
         reconcile()
         let fromIntent = request != nil
-        let operation = fromIntent && !relayEnabled ? "刷新" : "接力"
+        let operation = fromIntent ? "刷新" : "接力"
         let old = activity
         guard running, !editing, old.map(isLive) ?? resettingQueue,
               fromIntent || (!Task.isCancelled && UIApplication.shared.applicationState == .active) else {
@@ -707,7 +718,8 @@ import UIKit
         func create() throws -> (Island, SpeedAttributes.ContentState) {
             let anchor = Date()
             let state = readState(pending: pendingAppointments, anchor: anchor, total: renewCount + relayCount + 1)
-            let attrs = SpeedAttributes(sessionID: token, startedAt: anchor, buildIdentifier: Self.buildIdentifier)
+            let attrs = SpeedAttributes(sessionID: token, startedAt: anchor, buildIdentifier: Self.buildIdentifier,
+                                        monitoringStartedAt: monitoringStartedAt)
             if let request {
                 // With equal scores the system prefers the older card. Leave room
                 // above the regular score for a newly requested manual replacement.
@@ -769,7 +781,8 @@ import UIKit
 
     @available(iOS 26.0, *)
     private func appendReservation(at date: Date, token: UUID, request: ReservationRequest? = nil) throws {
-        let attributes = SpeedAttributes(sessionID: token, startedAt: date, buildIdentifier: Self.buildIdentifier)
+        let attributes = SpeedAttributes(sessionID: token, startedAt: date, buildIdentifier: Self.buildIdentifier,
+                                         monitoringStartedAt: monitoringStartedAt)
         let blank = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0, alignedRelays: 0)
         let content = snapshot(blank)
         let alert = AlertConfiguration(title: "灵动网速", body: "预约的网速活动已启动", sound: .default)
@@ -960,6 +973,7 @@ import UIKit
         running = false
         relayInterval = max(RelaySchedule.minimumInterval, relayInterval)
         sessionID = UUID(); editing = false
+        monitoringStartedAt = nil
         clearingAppointments = false
         foregroundRelayPaused = false
         nextForegroundReplan = nil

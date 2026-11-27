@@ -13,7 +13,7 @@ private func requireHostApp() throws {
 
 @available(iOS 17.0, *)
 struct RelayIslandMainIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "立即接力"
+    static var title: LocalizedStringResource = "刷新"
     static var description = IntentDescription("创建新的网速活动，保留其余预约。")
     static var openAppWhenRun: Bool = false
     #if ISLANDSPEED_MAIN_TARGET_ROUTING

@@ -81,10 +81,24 @@ struct SpeedWidget: Widget {
         let count = state.pendingRelays ?? 0
         let runs = "接力 \(state.totalRelays ?? 0) 次"
         let reservations = queueEnabled ? "预约 \(count)/4 · \(runs)" : runs
-        let reading = lastUpdated(context, onLockScreen: onLockScreen)
         return VStack(spacing: 1) {
             HStack(spacing: 8) {
-                stableText(reading).frame(maxWidth: .infinity, alignment: .leading)
+                Group {
+                    if onLockScreen {
+                        stableText(lastUpdated(context))
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("本次监控").fixedSize(horizontal: true, vertical: false)
+                            if let startedAt = context.attributes.monitoringStartedAt {
+                                Text(startedAt, style: .timer).monospacedDigit()
+                            } else {
+                                Text("—")
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 timingRow("运行", value: Text(context.attributes.startedAt, style: .timer))
             }
             HStack(spacing: 8) {
@@ -113,12 +127,12 @@ struct SpeedWidget: Widget {
         .frame(width: Self.timingColumnWidth, alignment: .leading)
     }
 
-    private func lastUpdated(_ context: ActivityViewContext<SpeedAttributes>, onLockScreen: Bool) -> String {
-        if let missing = unavailable(context) {
-            if onLockScreen && (context.state.lostSample == true || context.isStale) {
+    private func lastUpdated(_ context: ActivityViewContext<SpeedAttributes>) -> String {
+        if unavailable(context) != nil {
+            if context.state.lostSample == true || context.isStale {
                 return "上次 \(context.state.sampledAt.formatted(Self.clockFormat))"
             }
-            return missing == "待采样" ? "等待采样" : missing == "过期" ? "读数已过期" : "暂无有效读数"
+            return "等待采样"
         }
         return "更新 \(context.state.sampledAt.formatted(Self.clockFormat))"
     }
@@ -141,7 +155,7 @@ struct SpeedWidget: Widget {
                 }
             } else {
                 Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
-                    RelayPill(title: relayEnabled ? "立即接力" : "刷新")
+                    RelayPill(title: "刷新")
                 }
             }
         }
