@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.2.4'
-    CURRENT_PROJECT_VERSION: '18'
+    MARKETING_VERSION: '1.2.6'
+    CURRENT_PROJECT_VERSION: '20'
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -39,6 +39,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.islandspeed.local
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) ISLANDSPEED_APP ISLANDSPEED_MAIN_TARGET_ROUTING"
   IslandSpeedWidget:

@@ -35,6 +35,47 @@ import Foundation
         let limited = RelaySchedule.plan(desired: dates, existing: [dates[0], anchor], available: 2)
         precondition(limited.matched == 1 && limited.next == dates[1] && limited.release == anchor)
         precondition(RelaySchedule.plan(desired: dates, existing: dates).next == nil)
+        precondition(RelaySchedule.intervalOptions == [120, 150, 180, 210, 240, 270, 300])
+        precondition(RelaySchedule.intervalOptions.contains(RelaySchedule.defaultInterval))
+
+        func at(_ offset: Double) -> Date { anchor.addingTimeInterval(offset) }
+        let renewedAt = at(30)
+        let now = at(35)
+        let kept = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: [at(180), at(360), at(540)])
+        precondition(kept.matched == 3 && kept.next == at(720) && kept.release == nil)
+        let full = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: [at(180), at(360), at(540), at(720)])
+        precondition(full.matched == 4 && full.next == nil && full.release == nil)
+        let missing = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: [at(180), at(540), at(720)])
+        precondition(missing.matched == 3 && missing.next == at(360) && missing.release == nil)
+        let late = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: [at(240), at(420), at(600)])
+        precondition(late.matched == 0 && late.next == at(210))
+        let betterGrid = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: [at(100), at(210), at(390), at(570)])
+        precondition(betterGrid.matched == 3 && betterGrid.next == at(750) && betterGrid.release == at(100))
+        let expired = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: at(181), existing: [at(180), at(360), at(540)])
+        precondition(expired.matched == 0 && expired.next == at(210))
+
+        let reset = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now,
+            existing: [], retiring: [at(180), at(360), at(540), at(720)])
+        precondition(reset.matched == 0 && reset.next == at(210) && reset.release == at(720))
+        let spare = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now,
+            existing: [at(210)], retiring: [at(180)])
+        precondition(spare.matched == 1 && spare.next == at(390) && spare.release == nil)
+        let sameTime = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now,
+            existing: [], retiring: [at(210.001), at(750)])
+        precondition(sameTime.matched == 0 && sameTime.next == at(210) && sameTime.release == at(210.001))
+        let reducedQuota = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now,
+            existing: [at(210)], retiring: [at(180), at(360)], available: 3)
+        precondition(reducedQuota.matched == 1 && reducedQuota.next == at(390) && reducedQuota.release == at(360))
+        var oldQueue = [at(180), at(360), at(540), at(720)]
+        var newQueue: [Date] = []
+        for _ in 0..<RelaySchedule.capacity {
+            let step = RelaySchedule.plan(anchor: renewedAt, interval: 180, now: now, existing: newQueue, retiring: oldQueue)
+            guard let release = step.release, let next = step.next else { preconditionFailure("Expected to replace one appointment") }
+            oldQueue.removeAll { $0 == release }
+            newQueue.append(next)
+            precondition(oldQueue.count + newQueue.count == RelaySchedule.capacity)
+        }
+        precondition(oldQueue.isEmpty && newQueue == [at(210), at(390), at(570), at(750)])
         print("PASS: weighted one-second window, gaps, interface changes, reset, counter wrap, fast links and relay allocation")
     }
 }

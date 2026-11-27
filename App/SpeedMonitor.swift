@@ -74,7 +74,7 @@ import UIKit
         return false
     }
     @Published var relayEnabled = SpeedMonitor.supportsReservations
-    @Published var relayInterval = 180
+    @Published var relayInterval = RelaySchedule.defaultInterval
     @Published private(set) var relayStatus = "未预约"
     @Published private(set) var pendingCount = 0
     @Published private(set) var relayCount = 0
@@ -92,6 +92,7 @@ import UIKit
     private var sessionID = UUID()
     @Published private(set) var starting = false
     private var editing = false
+    private static let renewalCooldownSeconds = 3
     private var lastManualRenew: ContinuousClock.Instant?
     private var knownPendingLimit = RelaySchedule.capacity
     private var releasedSlotActivityID: String?
@@ -106,9 +107,10 @@ import UIKit
     private var observer: Task<Void, Never>?
     private var foregroundWork: Task<Void, Never>?
     private var sceneIsActive = false
-    private var needsForegroundMaintenance = false
+    private enum ForegroundMaintenance: Equatable { case reset, refill }
+    private var foregroundMaintenance: ForegroundMaintenance?
     private var foregroundRecoveryRequest: String?
-    private var emptyQueueActivityOnEntry: String?
+    private var retiringAppointments: Set<String> = []
     private var recoveryActivityID: String?
     private var baseline: (samples: Int, submits: Int, date: Date)?
     private var lastCheckDue: ContinuousClock.Instant?
@@ -420,12 +422,16 @@ import UIKit
     }
     private func isTerminal(_ item: Island) -> Bool { item.activityState == .ended || item.activityState == .dismissed }
     private func isLive(_ item: Island) -> Bool { item.activityState == .active || item.activityState == .stale }
-    private func plan(for anchor: Date, pending: [Island]) -> (matched: Int, next: Date?, release: Date?) {
-        let dates = RelaySchedule.dates(anchor: anchor, interval: relayInterval, now: Date())
-        return RelaySchedule.plan(desired: dates, existing: pending.map { $0.attributes.startedAt }, available: knownPendingLimit)
+    private func plan(for anchor: Date, pending: [Island], replacing: Bool = true) -> (matched: Int, next: Date?, release: Date?) {
+        let old = replacing ? pending.filter { retiringAppointments.contains($0.id) } : []
+        let new = replacing ? pending.filter { !retiringAppointments.contains($0.id) } : pending
+        return RelaySchedule.plan(anchor: anchor, interval: relayInterval, now: Date(),
+            existing: new.map { $0.attributes.startedAt },
+            retiring: old.map { $0.attributes.startedAt }, available: knownPendingLimit)
     }
     private func refreshQueueStatus() {
         let pending = pendingAppointments
+        retiringAppointments.formIntersection(pending.map(\.id))
         pendingCount = pending.count
         reservationPeak = max(reservationPeak, pendingCount)
         let matched = activity.map { plan(for: $0.attributes.startedAt, pending: pending).matched } ?? 0
@@ -481,6 +487,10 @@ import UIKit
                 if let old { _ = endActivity(old) }
                 for item in used where item.id != newest.id { _ = endActivity(item) }
                 recordRelay("预约接力：\(old?.id ?? "等待中") → \(newest.id)")
+                if relayEnabled, UIApplication.shared.applicationState != .background, foregroundMaintenance == nil {
+                    foregroundMaintenance = .refill
+                    startForegroundWorkIfNeeded()
+                }
             }
             refreshQueueStatus()
         } else if originalCount != scheduled.count {
@@ -570,14 +580,16 @@ import UIKit
         return success
     }
 
-    private func renew(source: String, request: ImmediateRequest?, recoveringQueue: Bool = false) async -> Bool {
+    private func renew(source: String, request: ImmediateRequest?, recoveringQueue: Bool = false,
+                       resettingQueue: Bool = false) async -> Bool {
         reconcile()
         let fromIntent = request != nil
-        guard running, !editing, let old = activity, isLive(old),
-              fromIntent || UIApplication.shared.applicationState == .active else {
+        let old = activity
+        guard running, !editing, old.map(isLive) ?? resettingQueue,
+              fromIntent || (!Task.isCancelled && UIApplication.shared.applicationState == .active) else {
             renewStatus = "接力处理中或当前活动不可用"; return false
         }
-        if let lastManualRenew, lastManualRenew.duration(to: .now) < .seconds(3) {
+        if let lastManualRenew, lastManualRenew.duration(to: .now) < .seconds(Self.renewalCooldownSeconds) {
             renewStatus = "请在上次接力三秒后重试"; return false
         }
         lastManualRenew = .now
@@ -587,10 +599,13 @@ import UIKit
         // Never end the displayed activity on a failed creation. Once a slot
         // was freed, retries reuse it until the user has filled the queue again.
         var released = false
+        func canReplaceCurrent() -> Bool {
+            running && sessionID == token && activity?.id == old?.id && (old.map(isLive) ?? resettingQueue)
+        }
         func freeSlot() async -> Bool {
-            guard releasedSlotActivityID != old.id, let last = pendingAppointments.last,
+            guard old == nil || releasedSlotActivityID != old?.id, let last = pendingAppointments.last,
                   await removePending(last, token: token) else { return false }
-            released = true; releasedSlotActivityID = old.id
+            released = true; releasedSlotActivityID = old?.id
             return true
         }
         func create() throws -> (Island, SpeedAttributes.ContentState) {
@@ -602,7 +617,7 @@ import UIKit
             return (try Island.request(attributes: attrs, content: content, pushType: nil), state)
         }
         if fromIntent, !pendingAppointments.isEmpty, pendingAppointments.count >= knownPendingLimit {
-            guard await freeSlot(), isCurrent(token, old.id) else {
+            guard await freeSlot(), canReplaceCurrent() else {
                 if sessionID == token { renewStatus = "无法确认预约已释放，保留当前活动" }; return false
             }
         }
@@ -612,8 +627,8 @@ import UIKit
             catch {
                 // A background button has one authorized creation. Foreground
                 // can retry a limit error after releasing a confirmed slot.
-                guard !fromIntent, !released, isLimit(error), await freeSlot(),
-                      isCurrent(token, old.id), UIApplication.shared.applicationState == .active else { throw error }
+                guard !fromIntent, !released, isLimit(error), !Task.isCancelled, UIApplication.shared.applicationState == .active,
+                      await freeSlot(), canReplaceCurrent(), !Task.isCancelled, UIApplication.shared.applicationState == .active else { throw error }
                 (new, initial) = try create()
             }
             bind(new); renewCount += 1; lastState = initial; lastAttempt = .now
@@ -621,10 +636,10 @@ import UIKit
             lastPublishedValue = key(initial)
             renewStatus = "\(source)接力成功"; status = "监控中"
             saveSession(); refreshQueueStatus()
-            recordRelay("\(source)接力：\(old.id) → \(new.id)")
-            _ = endActivity(old)
+            recordRelay("\(source)接力：\(old?.id ?? "等待中") → \(new.id)")
+            if let old { _ = endActivity(old) }
             if !fromIntent && relayEnabled {
-                let ended = await waitForEnd([old], token: token)
+                let ended = await waitForEnd(old.map { [$0] } ?? [], token: token)
                 guard isCurrent(token, new.id) else { return false }
                 if ended { _ = await editReservations(for: new, token: token, request: nil) }
                 else if recoveringQueue { recordRelay("旧活动仍在结束，将保留新活动并稍后补排") }
@@ -654,11 +669,15 @@ import UIKit
         while added < maximum {
             guard canCreate() else { return false }
             let pending = pendingAppointments
-            let planned = plan(for: current.attributes.startedAt, pending: pending)
-            guard let date = planned.next else { break }
-            if let release = planned.release, let target = pending.last(where: { $0.attributes.startedAt == release }) {
-                guard await removePending(target, token: token), canCreate() else { return false }
+            let planned = plan(for: current.attributes.startedAt, pending: pending, replacing: inForeground)
+            if let release = planned.release, planned.next != nil || inForeground {
+                let candidates = pending.filter { $0.attributes.startedAt == release }
+                let old = inForeground ? candidates.last { retiringAppointments.contains($0.id) } : nil
+                if let target = old ?? (planned.next == nil ? nil : candidates.last) {
+                    guard await removePending(target, token: token), canCreate() else { return false }
+                }
             }
+            guard let date = planned.next else { break }
             guard date > Date() else { return false }
             do {
                 let attributes = SpeedAttributes(sessionID: token, startedAt: date)
@@ -680,7 +699,7 @@ import UIKit
                 if isLimit(error), !pending.isEmpty, planned.release == nil {
                     knownPendingLimit = min(knownPendingLimit, pending.count)
                     if inForeground, !retriedLimit,
-                       plan(for: current.attributes.startedAt, pending: pending).release != nil {
+                       plan(for: current.attributes.startedAt, pending: pending, replacing: inForeground).release != nil {
                         retriedLimit = true
                         continue
                     }
@@ -712,7 +731,7 @@ import UIKit
         return ok
     }
 
-    private func replanInForeground() async {
+    private func replanInForeground(reporting: Bool = false) async {
         reconcile()
         guard let current = activity, running, relayEnabled, !editing,
               UIApplication.shared.applicationState == .active else { return }
@@ -720,14 +739,15 @@ import UIKit
         editing = true
         defer { if sessionID == token { editing = false; reconcile() } }
         _ = await editReservations(for: current, token: token, request: nil)
-        if foregroundRecoveryRequest == nil, isCurrent(token, current.id), recoveryActivityID == current.id {
+        if isCurrent(token, current.id), reporting || recoveryActivityID == current.id {
             reportForegroundRecovery(for: current)
         }
     }
-    func scheduleRelay() { Task { await replanInForeground() } }
+    func scheduleRelay() { Task { await replanInForeground(reporting: true) } }
     func cancelRelay() {
         reconcile()
         guard running, !editing else { return }
+        foregroundMaintenance = nil
         let token = sessionID
         let targets = pendingAppointments
         editing = true
@@ -747,9 +767,10 @@ import UIKit
         guard running else { return }
         UserDefaults.standard.removeObject(forKey: Self.sessionKey)
         running = false
+        relayInterval = max(RelaySchedule.minimumInterval, relayInterval)
         sessionID = UUID(); editing = false
         loop?.cancel(); loop = nil; foregroundWork?.cancel()
-        foregroundRecoveryRequest = nil; needsForegroundMaintenance = false; emptyQueueActivityOnEntry = nil
+        foregroundRecoveryRequest = nil; foregroundMaintenance = nil; retiringAppointments.removeAll()
         foregroundRecoveryStatus = nil
         let old = activity
         bind(nil)
@@ -771,8 +792,7 @@ import UIKit
         sceneIsActive = phase == .active
         if phase == .background {
             foregroundWork?.cancel()
-            needsForegroundMaintenance = false
-            emptyQueueActivityOnEntry = nil
+            foregroundMaintenance = nil
             if running && baseline == nil { baseline = (sampleCount, submitCount, Date()) }
         }
         guard phase == .active else { return }
@@ -786,15 +806,14 @@ import UIKit
             self.baseline = nil
         }
         if running && (returned || restored) {
-            needsForegroundMaintenance = true
-            emptyQueueActivityOnEntry = relayEnabled && pendingAppointments.isEmpty ? activity?.id : nil
+            foregroundMaintenance = .reset
         }
         startForegroundWorkIfNeeded()
     }
 
     private func startForegroundWorkIfNeeded() {
         guard sceneIsActive, foregroundWork == nil,
-              foregroundRecoveryRequest != nil || needsForegroundMaintenance else { return }
+              foregroundRecoveryRequest != nil || foregroundMaintenance != nil else { return }
         foregroundWork = Task { [weak self] in
             guard let self else { return }
             await self.performForegroundWork()
@@ -807,36 +826,50 @@ import UIKit
             startForegroundWorkIfNeeded()
         }
         await Task.yield()
-        while sceneIsActive && !Task.isCancelled && (foregroundRecoveryRequest != nil || needsForegroundMaintenance) {
+        while sceneIsActive && !Task.isCancelled && (foregroundRecoveryRequest != nil || foregroundMaintenance != nil) {
             guard UIApplication.shared.applicationState == .active, !editing, !starting else {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
                 continue
             }
-            needsForegroundMaintenance = false
-            if let id = foregroundRecoveryRequest {
+            let maintenance = foregroundMaintenance
+            foregroundMaintenance = nil
+            if maintenance == .reset {
+                let request = foregroundRecoveryRequest
+                await resetInForeground()
+                if foregroundRecoveryRequest == request { foregroundRecoveryRequest = nil }
+            } else if let id = foregroundRecoveryRequest {
                 await recoverQueueFromLink(activityID: id)
                 if foregroundRecoveryRequest == id { foregroundRecoveryRequest = nil }
             } else {
-                await maintainInForeground()
+                await replanInForeground(reporting: true)
             }
         }
     }
 
-    private func maintainInForeground() async {
+    private func resetInForeground() async {
         refreshLocation()
-        if let current = activity {
-            let missedRelay = relayEnabled && relayCount > 0 && scheduled.isEmpty && recoveryActivityID != current.id
-                && Date().timeIntervalSince(current.attributes.startedAt) >= Double(relayInterval)
-            if current.activityState == .stale || latestUpdateIsStalled || missedRelay {
-                let recoveringQueue = relayEnabled && pendingAppointments.isEmpty
-                let renewed = await renew(source: "前台恢复", request: nil, recoveringQueue: recoveringQueue)
-                if renewed {
-                    if recoveringQueue, let activity { reportForegroundRecovery(for: activity) }
-                    return
-                }
+        guard running else { return }
+        guard relayEnabled else {
+            if activity?.activityState == .stale || latestUpdateIsStalled {
+                _ = await renew(source: "前台恢复", request: nil)
             }
+            return
         }
-        await replanInForeground()
+        let token = sessionID
+        retiringAppointments = Set(pendingAppointments.map(\.id))
+        foregroundRecoveryStatus = "正在重排全部预约…"
+        if let current = activity,
+           Date().timeIntervalSince(current.attributes.startedAt) < Double(Self.renewalCooldownSeconds) {
+            await replanInForeground(reporting: true)
+            return
+        }
+        let renewed = await renew(source: "回前台重排", request: nil, recoveringQueue: true, resettingQueue: true)
+        guard running, sessionID == token else { return }
+        if renewed, let activity {
+            reportForegroundRecovery(for: activity)
+        } else {
+            showForegroundRecovery("前台重排未完成，剩余 \(pendingAppointments.count) 个预约。\(renewStatus)")
+        }
     }
 
     private func recoverQueueFromLink(activityID: String) async {
@@ -848,16 +881,11 @@ import UIKit
         }
         guard current.id == activityID else {
             // Another handoff may have finished while the app was opening.
-            let count = plan(for: current.attributes.startedAt, pending: pendingAppointments).matched
-            showForegroundRecovery("网速活动已切换，当前预约 \(count)/\(RelaySchedule.capacity)。")
+            if foregroundRecoveryStatus == nil { reportForegroundRecovery(for: current) }
             return
         }
         let token = sessionID
-        // Scene activation can precede URL delivery. A passive refill during
-        // that transition doesn't consume the requested replacement.
-        let wasEmptyOnEntry = emptyQueueActivityOnEntry == current.id
-        emptyQueueActivityOnEntry = nil
-        if recoveryActivityID != current.id && (wasEmptyOnEntry || pendingAppointments.isEmpty) {
+        if recoveryActivityID != current.id && pendingAppointments.isEmpty {
             let renewed = await renew(source: "耗尽预约恢复", request: nil, recoveringQueue: true)
             guard running, sessionID == token else { return }
             guard renewed, let replacement = activity, replacement.id != current.id,
@@ -867,28 +895,30 @@ import UIKit
             }
             reportForegroundRecovery(for: replacement)
         } else {
-            await replanInForeground()
-            if isCurrent(token, current.id) { reportForegroundRecovery(for: current) }
+            await replanInForeground(reporting: true)
         }
     }
 
     private func reportForegroundRecovery(for current: Island) {
-        let count = plan(for: current.attributes.startedAt, pending: pendingAppointments).matched
+        let pending = pendingAppointments
+        let count = plan(for: current.attributes.startedAt, pending: pending).matched
+        let oldCount = pending.filter { retiringAppointments.contains($0.id) }.count
         let capacity = RelaySchedule.capacity
-        if count == capacity {
+        if count == capacity && oldCount == 0 {
             if recoveryActivityID == current.id {
                 recoveryActivityID = nil
                 saveSession()
             }
-            showForegroundRecovery("已补齐 \(count)/\(capacity) 个预约。")
+            showForegroundRecovery("已排好 \(count)/\(capacity) 个预约，可切回其他 App。")
         } else {
-            showForegroundRecovery("已恢复 \(count)/\(capacity) 个预约，当前活动继续运行。可在 App 内重排剩余预约。")
+            let fallback = oldCount == 0 ? "" : "，仍有 \(oldCount) 个旧预约可接续"
+            showForegroundRecovery("已排 \(count)/\(capacity) 个新预约\(fallback)。可在 App 内重排剩余预约。")
         }
     }
 
     private func showForegroundRecovery(_ result: String) {
         foregroundRecoveryStatus = result
-        recordRelay("前台补齐：\(result)")
+        recordRelay("前台预约：\(result)")
     }
 
     func copyDiagnostics() {

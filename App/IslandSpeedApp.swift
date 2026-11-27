@@ -43,7 +43,7 @@ struct ContentView: View {
                                 ForEach([1, 2, 3, 5, 10, 15], id: \.self) { Text("\($0) 秒").tag($0) }
                             }.labelsHidden().pickerStyle(.menu)
                         }
-                        Text("读数变化时按选定间隔提交。回到前台会补齐预约。读数过期、提交卡住，或预约耗尽又错过一次接力时，会重建当前活动。")
+                        Text("读数变化时按选定间隔提交。开启预约后，回到 App 会重新排列整组预约，请等显示「已排好」再切出。")
                             .font(.footnote).foregroundStyle(.secondary)
                         if monitor.running {
                             Button("立即重建灵动岛（不停止采样）") { monitor.renewNow() }.buttonStyle(.bordered)
@@ -62,8 +62,11 @@ struct ContentView: View {
                         if monitor.relayEnabled {
                             setting("接力间隔") {
                                 Picker("接力间隔", selection: $monitor.relayInterval) {
-                                    ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
-                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
+                                    if monitor.relayInterval < RelaySchedule.minimumInterval {
+                                        Text("\(monitor.relayInterval) 秒（旧会话）").tag(monitor.relayInterval)
+                                    }
+                                    ForEach(RelaySchedule.intervalOptions, id: \.self) { Text("\($0) 秒").tag($0) }
+                                }.labelsHidden().pickerStyle(.menu).disabled(monitor.running || monitor.starting)
                             }
                             Text("最多预留 4 个预约，实际可用数量由系统决定。到时启动可能有提示音或短暂双活动。还有预约时可立即接力，满额时会先释放最远的预约。用完后点「打开并补齐」。也可以点「重排预约」每次补一个。")
                                 .font(.footnote).foregroundStyle(.secondary)
