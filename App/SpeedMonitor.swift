@@ -81,7 +81,15 @@ import UIKit
         return false
     }
     @Published private(set) var relayEnabled = SpeedMonitor.supportsReservations { didSet { savePreferences() } }
-    @Published private(set) var relayInterval = RelaySchedule.defaultInterval { didSet { savePreferences() } }
+    @Published var relayInterval = RelaySchedule.defaultInterval {
+        didSet {
+            savePreferences()
+            guard !applyingPreferences, relayInterval != oldValue, running, canScheduleReservations else { return }
+            // Discard any appointment plan suspended while freeing a slot.
+            reservationRevision += 1
+            scheduleRelay()
+        }
+    }
     @Published private(set) var relayStatus = "未预约"
     @Published private(set) var appointmentDates: [Date] = []
     var pendingCount: Int { appointmentDates.count }
@@ -905,15 +913,6 @@ import UIKit
         lastCheckDue = nil
         if enabled { scheduleRelay() }
         else { clearReservations() }
-    }
-
-    func setRelayInterval(_ seconds: Int) {
-        guard RelaySchedule.intervalOptions.contains(seconds), relayInterval != seconds else { return }
-        relayInterval = seconds
-        guard running, canScheduleReservations else { return }
-        // Discard any appointment plan suspended while freeing a slot.
-        reservationRevision += 1
-        scheduleRelay()
     }
 
     func cancelRelay() {

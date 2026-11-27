@@ -34,7 +34,7 @@ import UIKit
     }
 
     private static let refreshOptions = [1, 2, 3, 5, 10, 15]
-    private static let clockFormat = Date.FormatStyle(date: .omitted, time: .standard, locale: Locale(identifier: "en_GB"))
+    private static let sampleClockFormat = Date.FormatStyle(date: .omitted, time: .standard, locale: Locale(identifier: "en_GB"))
 
     init(monitor: SpeedMonitor) {
         self.monitor = monitor
@@ -201,7 +201,7 @@ import UIKit
         if monitor.running {
             if monitor.status != "监控中" { return monitor.status }
             if monitor.hasRecentReading, let lastSample = monitor.lastSample {
-                return "最近采样 \(lastSample.formatted(Self.clockFormat)) · 切出后在灵动岛查看"
+                return "最近采样 \(lastSample.formatted(Self.sampleClockFormat)) · 切出后在灵动岛查看"
             }
             return "等待有效网速读数…"
         }
@@ -242,7 +242,7 @@ import UIKit
             } else {
                 appointmentTimeline
                 if let deadline = monitor.nextForegroundReplan, !monitor.foregroundRelayPaused {
-                    replanProgress(until: deadline)
+                    replanCountdown(until: deadline)
                 }
                 note(queueExplanation)
             }
@@ -254,22 +254,17 @@ import UIKit
         }
     }
 
-    private func replanProgress(until deadline: ContinuousClock.Instant) -> some View {
+    private func replanCountdown(until deadline: ContinuousClock.Instant) -> some View {
         let total = RelaySchedule.foregroundReplanInterval / .seconds(1)
-        return TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+        return TimelineView(.periodic(from: .now, by: 1)) { _ in
             let remaining = max(0, min(total, ContinuousClock.now.duration(to: deadline) / .seconds(1)))
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text("下次重排")
-                    Spacer(minLength: 8)
-                    Text("\(Int(remaining.rounded(.up))) 秒")
-                        .monospacedDigit().fontWeight(.semibold)
-                }
-                .accessibilityElement(children: .combine)
-                ProgressView(value: total - remaining, total: total)
-                    .tint(AppPalette.sage)
-                    .accessibilityHidden(true)
+            HStack {
+                Text("下次重排")
+                Spacer(minLength: 8)
+                Text("\(Int(remaining.rounded(.up))) 秒")
+                    .monospacedDigit().fontWeight(.semibold)
             }
+            .accessibilityElement(children: .combine)
             .font(.footnote).foregroundStyle(AppPalette.muted)
         }
     }
@@ -302,13 +297,14 @@ import UIKit
             HStack(spacing: 5) {
                 ForEach(0..<RelaySchedule.capacity, id: \.self) { index in
                     let date = index < monitor.appointmentDates.count ? monitor.appointmentDates[index] : nil
+                    let time = date.map(appointmentTime)
                     let isNext = date != nil && index == 0
                     VStack(spacing: 4) {
                         Rectangle()
                             .fill(date == nil ? AppPalette.line : isNext ? AppPalette.sage : AppPalette.segmentFilled)
                             .frame(height: 4)
                             .accessibilityHidden(true)
-                        Text(date?.formatted(Self.clockFormat) ?? "—")
+                        Text(time ?? "—")
                             .font(.caption2.weight(.semibold)).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.6)
                             .padding(.horizontal, 2)
@@ -320,10 +316,29 @@ import UIKit
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("第 \(index + 1) 次预约")
-                    .accessibilityValue(date?.formatted(Self.clockFormat) ?? "未安排")
+                    .accessibilityValue(time ?? "未安排")
                 }
             }
         }
+    }
+
+    private func appointmentTime(_ date: Date) -> String {
+        let localTime = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute, .second], from: date)
+        guard let hour = localTime.hour, let minute = localTime.minute, let second = localTime.second else { return "—" }
+        let displayHour: Int
+        switch Locale.autoupdatingCurrent.hourCycle {
+        case .zeroToEleven:
+            displayHour = hour % 12
+        case .oneToTwelve:
+            displayHour = (hour + 11) % 12 + 1
+        case .oneToTwentyFour:
+            displayHour = hour == 0 ? 24 : hour
+        case .zeroToTwentyThree:
+            displayHour = hour
+        @unknown default:
+            displayHour = hour
+        }
+        return String(format: "%02d:%02d:%02d", displayHour, minute, second)
     }
 
     private var settingsCards: some View {
@@ -340,17 +355,15 @@ import UIKit
                         .disabled(monitor.clearingAppointments)
                     note(monitor.clearingAppointments ? "正在解除已安排的接力。" : "提前排好最多 4 次，到点换新的网速卡。")
                     Divider()
-                    intervalPicker("两次接力的间隔",
-                                   selection: Binding(get: { monitor.relayInterval }, set: { monitor.setRelayInterval($0) }),
+                    intervalPicker("两次接力的间隔", selection: $monitor.relayInterval,
                                    options: RelaySchedule.intervalOptions)
                     if !monitor.relayEnabled {
                         note("开启自动接力后使用所选间隔。")
                     } else if monitor.foregroundRelayPaused {
                         note("恢复接力后使用所选间隔。")
-                    } else if monitor.arrangingAppointments {
-                        note("正在安排预约，排好后可切出 App。")
-                    } else if monitor.running {
-                        note("调整后会按新间隔重排待启动的预约。")
+                    } else if monitor.running || monitor.arrangingAppointments {
+                        note(monitor.arrangingAppointments ? "正在安排预约，排好后可切出 App。"
+                                                          : "调整后会按新间隔重排待启动的预约。")
                     }
                 } else {
                     note("预约接力需要 iOS 26 或更高版本。")
@@ -444,7 +457,7 @@ import UIKit
                         HStack {
                             Text("第 \(entry.offset + 1) 次").foregroundStyle(AppPalette.muted)
                             Spacer()
-                            Text(entry.element.formatted(Self.clockFormat)).monospacedDigit()
+                            Text(appointmentTime(entry.element)).monospacedDigit()
                         }
                         .font(.subheadline).padding(.vertical, 3)
                     }

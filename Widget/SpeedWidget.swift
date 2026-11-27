@@ -9,7 +9,6 @@ import WidgetKit
 }
 
 struct SpeedWidget: Widget {
-    private static let clockFormat = Date.FormatStyle(date: .omitted, time: .standard, locale: Locale(identifier: "en_GB"))
     private static let timingColumnWidth: CGFloat = 86
 
     var body: some WidgetConfiguration {
@@ -83,21 +82,15 @@ struct SpeedWidget: Widget {
         let reservations = queueEnabled ? "预约 \(count)/4 · \(runs)" : runs
         return VStack(spacing: 1) {
             HStack(spacing: 8) {
-                Group {
-                    if onLockScreen {
-                        stableText(lastUpdated(context))
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("本次监控").fixedSize(horizontal: true, vertical: false)
+                    if let startedAt = context.attributes.monitoringStartedAt {
+                        Text(startedAt, style: .timer).monospacedDigit()
                     } else {
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("本次监控").fixedSize(horizontal: true, vertical: false)
-                            if let startedAt = context.attributes.monitoringStartedAt {
-                                Text(startedAt, style: .timer).monospacedDigit()
-                            } else {
-                                Text("—")
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
+                        Text("—")
                     }
                 }
+                .accessibilityElement(children: .combine)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 timingRow("运行", value: Text(context.attributes.startedAt, style: .timer))
             }
@@ -125,16 +118,6 @@ struct SpeedWidget: Widget {
             value.monospacedDigit().frame(width: 57, alignment: .trailing)
         }
         .frame(width: Self.timingColumnWidth, alignment: .leading)
-    }
-
-    private func lastUpdated(_ context: ActivityViewContext<SpeedAttributes>) -> String {
-        if unavailable(context) != nil {
-            if context.state.lostSample == true || context.isStale {
-                return "上次 \(context.state.sampledAt.formatted(Self.clockFormat))"
-            }
-            return "等待采样"
-        }
-        return "更新 \(context.state.sampledAt.formatted(Self.clockFormat))"
     }
 
     @available(iOS 17.0, *)
