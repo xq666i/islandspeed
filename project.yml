@@ -5,8 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.2.2'
-    CURRENT_PROJECT_VERSION: '16'
+    MARKETING_VERSION: '1.2.3'
+    CURRENT_PROJECT_VERSION: '17'
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
@@ -27,6 +27,10 @@ targets:
         CFBundleDisplayName: 灵动网速
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.islandspeed.local.relay
+            CFBundleURLSchemes: [islandspeed]
         UILaunchScreen: {}
         NSSupportsLiveActivities: true
         UIBackgroundModes: [location]

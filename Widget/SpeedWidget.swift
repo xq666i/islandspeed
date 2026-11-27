@@ -61,13 +61,14 @@ struct SpeedWidget: Widget {
                                             .background(.white.opacity(0.17), in: Capsule())
                                     }.buttonStyle(.plain)
                                 }
-                                Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
-                                    Text("立即接力")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .lineLimit(1).foregroundStyle(.white)
-                                        .padding(.horizontal, 6).frame(height: 28)
-                                        .background(.white.opacity(0.17), in: Capsule())
-                                }.buttonStyle(.plain)
+                                if context.state.alignedRelays != nil, context.state.pendingRelays == 0,
+                                   let url = RelayRecoveryLink.url(activityID: context.activityID) {
+                                    Link(destination: url) { relayLabel("打开并补齐") }
+                                } else {
+                                    Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
+                                        relayLabel("立即接力")
+                                    }.buttonStyle(.plain)
+                                }
                             }
                         }
                     }
@@ -80,6 +81,13 @@ struct SpeedWidget: Widget {
                 compact("arrow.down", context.state.down, .green, unavailable(context), minimal: true)
             }.keylineTint(.green)
         }
+    }
+
+    private func relayLabel(_ title: String) -> some View {
+        Text(title).font(.system(size: 11, weight: .semibold))
+            .lineLimit(1).foregroundStyle(.white)
+            .padding(.horizontal, 6).frame(height: 28)
+            .background(.white.opacity(0.17), in: Capsule())
     }
 
     private func unavailable(_ context: ActivityViewContext<SpeedAttributes>) -> String? {

@@ -49,6 +49,9 @@ struct ContentView: View {
                             Button("立即重建灵动岛（不停止采样）") { monitor.renewNow() }.buttonStyle(.bordered)
                         }
                         Text(monitor.status).font(.subheadline)
+                    if let result = monitor.foregroundRecoveryStatus {
+                        Text(result).font(.footnote).foregroundStyle(.secondary)
+                    }
                         Divider()
                         Text("自动接力").font(.headline)
                         if SpeedMonitor.supportsReservations {
@@ -62,7 +65,7 @@ struct ContentView: View {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
                                 }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
                             }
-                            Text("最多预留 4 个预约，实际可用数量由系统决定。到时启动可能有提示音或短暂双活动。点击立即接力会创建新活动；满额时先释放最远预约，保留其余预约。长按展开后每点一次「重排预约」更新一个时间；返回 App 自动重排。")
+                            Text("最多预留 4 个预约，实际可用数量由系统决定。到时启动可能有提示音或短暂双活动。还有预约时可立即接力，满额时会先释放最远的预约。用完后点「打开并补齐」。也可以点「重排预约」每次补一个。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
                                 Button("重排预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
@@ -129,6 +132,7 @@ struct ContentView: View {
             }.navigationTitle("灵动网速")
                 .onAppear { monitor.sceneChanged(scenePhase) }
                 .onChange(of: scenePhase) { phase in monitor.sceneChanged(phase) }
+                .onOpenURL { monitor.openRelayRecovery($0) }
         }
     }
     private func setting<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {

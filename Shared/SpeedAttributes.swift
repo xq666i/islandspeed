@@ -17,6 +17,25 @@ struct SpeedAttributes: ActivityAttributes {
     var startedAt: Date
 }
 
+enum RelayRecoveryLink {
+    static func url(activityID: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = "islandspeed"
+        components.host = "relay"
+        components.path = "/restore"
+        components.queryItems = [URLQueryItem(name: "activity", value: activityID)]
+        return components.url
+    }
+
+    static func activityID(from url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "islandspeed", components.host == "relay", components.path == "/restore",
+              let items = components.queryItems, items.count == 1, items[0].name == "activity",
+              let activityID = items[0].value, !activityID.isEmpty else { return nil }
+        return activityID
+    }
+}
+
 enum RateText {
     static func parts(_ bytes: Double) -> (String, String) {
         let v = max(0, bytes.isFinite ? bytes : 0)

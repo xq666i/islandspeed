@@ -22,6 +22,8 @@ def package(app: Path, output: Path) -> None:
     for key in ('NSLocationWhenInUseUsageDescription', 'NSLocationAlwaysAndWhenInUseUsageDescription', 'NSSupportsLiveActivities'):
         if not info.get(key):
             raise ValueError(f'缺少 Info.plist 配置：{key}')
+    if not any('islandspeed' in item.get('CFBundleURLSchemes', []) for item in info.get('CFBundleURLTypes', [])):
+        raise ValueError('主 App 未注册预约恢复链接')
     with (app / widget / 'Info.plist').open('rb') as stream:
         extension = plistlib.load(stream)
     if extension.get('NSExtension', {}).get('NSExtensionPointIdentifier') != 'com.apple.widgetkit-extension':
