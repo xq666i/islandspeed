@@ -78,6 +78,19 @@ import Foundation
             precondition(oldQueue.count + newQueue.count == RelaySchedule.capacity)
         }
         precondition(oldQueue.isEmpty && newQueue == [at(210), at(390), at(570), at(750)])
+
+        let two = [at(240), at(480)]
+        let third = RelaySchedule.additionDate(anchor: anchor, interval: 240, now: anchor, existing: two)
+        precondition(third == at(720))
+        let fourth = RelaySchedule.additionDate(anchor: anchor, interval: 240, now: anchor, existing: two + [at(720)])
+        precondition(fourth == at(960))
+        precondition(RelaySchedule.additionDate(anchor: anchor, interval: 240, now: anchor, existing: defaultDates) == nil)
+
+        let seconds = RelaySchedule.foregroundReplanInterval / .seconds(1)
+        precondition(seconds == 10)
+        let shifted = anchor.addingTimeInterval(seconds)
+        let shiftedDates = RelaySchedule.dates(anchor: shifted, interval: 240, now: shifted)
+        precondition(shiftedDates == defaultDates.map { $0.addingTimeInterval(10) })
         print("PASS: weighted one-second window, gaps, interface changes, reset, counter wrap, fast links and relay allocation")
     }
 }

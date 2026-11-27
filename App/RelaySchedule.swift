@@ -5,6 +5,7 @@ enum RelaySchedule {
     static let minimumInterval = 120
     static let maximumInterval = 300
     static let defaultInterval = 240
+    static let foregroundReplanInterval = Duration.seconds(10)
     static let intervalOptions = Array(stride(from: minimumInterval, through: maximumInterval, by: 30))
 
     // The grid belongs to the active activity, even after a delayed wake.
@@ -37,6 +38,11 @@ enum RelaySchedule {
         let retainedDates = (0..<capacity).map { first.addingTimeInterval(Double($0) * step) }
         let retained = plan(desired: retainedDates, existing: existing, available: available)
         return retained.matched > usual.matched ? retained : usual
+    }
+
+    static func additionDate(anchor: Date, interval: Int, now: Date, existing: [Date]) -> Date? {
+        guard existing.count < capacity else { return nil }
+        return plan(anchor: anchor, interval: interval, now: now, existing: existing).next
     }
 
     static func plan(desired: [Date], existing: [Date], available: Int = capacity) -> (matched: Int, next: Date?, release: Date?) {

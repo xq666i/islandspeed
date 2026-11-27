@@ -30,7 +30,6 @@ import UIKit
         case appointments = "灵动岛接力"
         case activity = "网速卡操作"
         case stop = "停止监控？"
-        case cancelAppointments = "取消剩余预约？"
 
         var id: Self { self }
     }
@@ -215,8 +214,10 @@ import UIKit
         card("灵动岛接力", status: queueLabel, good: monitor.running && monitor.queueIsReady && !monitor.arrangingAppointments) {
             if !SpeedMonitor.supportsReservations {
                 note("预约接力需要 iOS 26 或更高版本。")
+            } else if monitor.clearingAppointments {
+                note("正在等待系统解除预约，网速监控继续。")
             } else if !monitor.relayEnabled {
-                note("可在设置中开启自动接力。")
+                note(monitor.pendingCount == 0 ? "可在设置中开启自动接力。" : "仍有 \(monitor.pendingCount) 个预约等待系统结束。")
             } else if !monitor.running {
                 note("同一张网速卡用久了，iOS 可能放慢刷新。开始监控后会预约最多 4 张新卡，到点自动接替，减少读数停更。")
             } else {
@@ -242,13 +243,20 @@ import UIKit
 
     private var queueLabel: String {
         if !SpeedMonitor.supportsReservations { return "系统不支持" }
+        if monitor.clearingAppointments { return "正在解除" }
         if !monitor.relayEnabled { return "已关闭" }
+        if monitor.foregroundRelayPaused { return "暂不补排" }
         if !monitor.running { return "待安排" }
         if monitor.arrangingAppointments { return "正在安排" }
         return "\(monitor.pendingCount)/\(RelaySchedule.capacity) 已预约"
     }
 
     private var queueExplanation: String {
+        if monitor.clearingAppointments { return "正在等待系统解除预约。" }
+        if monitor.foregroundRelayPaused {
+            if monitor.pendingCount > 0 { return "仍有 \(monitor.pendingCount) 个预约等待系统结束。" }
+            return "本次停留期间暂停自动补排。可手动重排，或切出后再回来。"
+        }
         if monitor.arrangingAppointments { return "正在安排预约，请等排好后再切出。" }
         if monitor.queueIsReady { return "已排好，可切回其他 App。" }
         if monitor.pendingCount == 0 { return "当前无预约，可在「查看预约」中重新安排。" }
@@ -293,17 +301,17 @@ import UIKit
             }
             card("灵动岛接力") {
                 if SpeedMonitor.supportsReservations {
-                    Toggle("自动接力", isOn: $monitor.relayEnabled)
+                    Toggle("自动接力", isOn: Binding(get: { monitor.relayEnabled }, set: { monitor.setRelayEnabled($0) }))
                         .font(.subheadline.weight(.semibold))
                         .tint(AppPalette.sage)
-                        .disabled(monitor.running || monitor.starting)
-                    note("提前排好最多 4 次，到点换新的网速卡。")
+                        .disabled(monitor.clearingAppointments)
+                    note(monitor.clearingAppointments ? "正在解除已安排的接力。" : "提前排好最多 4 次，到点换新的网速卡。")
                     if monitor.relayEnabled {
                         Divider()
                         intervalPicker("两次接力的间隔", selection: $monitor.relayInterval, options: RelaySchedule.intervalOptions)
                             .disabled(monitor.running || monitor.starting)
                     }
-                    if monitor.running || monitor.starting { note("停止监控后可修改接力设置。") }
+                    if monitor.running || monitor.starting { note("停止监控后可修改接力间隔。") }
                 } else {
                     note("预约接力需要 iOS 26 或更高版本。")
                 }
@@ -387,7 +395,7 @@ import UIKit
                         sheetAction("打开系统设置", primary: true, action: monitor.openSettings)
                     }
                 case .appointments:
-                    note("当前有 \(monitor.pendingCount) 个预约。返回 App 后会重新安排，排好后再切出。")
+                    note("当前有 \(monitor.pendingCount) 个预约。")
                     ForEach(Array(monitor.appointmentDates.enumerated()), id: \.offset) { entry in
                         HStack {
                             Text("第 \(entry.offset + 1) 次").foregroundStyle(AppPalette.muted)
@@ -397,16 +405,10 @@ import UIKit
                         .font(.subheadline).padding(.vertical, 3)
                     }
                     if monitor.running { note(queueExplanation) }
-                    if monitor.renewStatus.contains("失败") { note(monitor.renewStatus) }
-                    sheetAction("立即重建网速卡", primary: true) { monitor.renewNow() }
+                    sheetAction("重排接力", action: monitor.scheduleRelay)
                         .disabled(!monitor.running || monitor.arrangingAppointments)
-                    sheetAction("重排预约") { monitor.scheduleRelay() }
-                        .disabled(!monitor.running || monitor.arrangingAppointments)
-                    if monitor.pendingCount > 0 {
-                        Button("取消剩余预约", role: .destructive) { presentedSheet = .cancelAppointments }
-                            .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
-                            .disabled(monitor.arrangingAppointments)
-                    }
+                    sheetAction("解除所有接力", action: monitor.cancelRelay)
+                        .disabled(!monitor.running || monitor.clearingAppointments || (monitor.foregroundRelayPaused && monitor.pendingCount == 0))
                 case .activity:
                     note("重建当前网速卡，采样继续运行。")
                     if monitor.renewStatus != "尚未重建" { note(monitor.renewStatus) }
@@ -415,10 +417,12 @@ import UIKit
                 case .stop:
                     note("灵动岛网速卡将关闭，尚未开始的预约会一并取消。")
                     sheetAction("停止监控", primary: true) { monitor.stop(); presentedSheet = nil }
-                case .cancelAppointments:
-                    note("当前网速卡会继续工作。再次返回 App 或手动重排后，可重新预约。")
-                    sheetAction("取消剩余预约", primary: true) { monitor.cancelRelay(); presentedSheet = nil }
-                        .disabled(monitor.arrangingAppointments)
+                }
+            }
+            .transaction { transaction in
+                if sheet == .appointments {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
                 }
             }
             .padding(20)

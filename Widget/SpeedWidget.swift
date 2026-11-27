@@ -96,10 +96,10 @@ struct SpeedWidget: Widget {
                     HStack(spacing: 4) {
                         Text("下次")
                         Text(timerInterval: min(context.attributes.startedAt, next)...next, countsDown: true, showsHours: false)
-                            .monospacedDigit().frame(width: 38, alignment: .trailing)
+                            .monospacedDigit().frame(width: 57, alignment: .trailing)
                     }
                 } else if queueEnabled && count == 0 {
-                    Text("预约已用完").foregroundStyle(IslandPalette.up)
+                    Text("预约已用完")
                 }
             }
         }
@@ -123,9 +123,11 @@ struct SpeedWidget: Widget {
     private func relayActions(_ context: ActivityViewContext<SpeedAttributes>) -> some View {
         HStack(spacing: 8) {
             if #available(iOS 26.0, *), context.state.alignedRelays != nil {
+                let full = (context.state.pendingRelays ?? 0) >= 4
                 Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
-                    RelayPill(title: "重排预约")
+                    RelayPill(title: full ? "预约已满" : "新增预约")
                 }
+                .disabled(full)
             }
             if context.state.alignedRelays != nil, context.state.pendingRelays == 0,
                let url = RelayRecoveryLink.url(activityID: context.activityID) {
@@ -159,6 +161,7 @@ struct SpeedWidget: Widget {
                 .frame(width: 10, height: 12)
             VStack(alignment: .leading, spacing: 0) {
                 stableText(number)
+                    .foregroundStyle(unavailable == nil ? tint : IslandPalette.text)
                     .font(.system(size: minimal ? 11 : 12, weight: .semibold, design: .monospaced))
                     .minimumScaleFactor(0.6).lineLimit(1)
                     .frame(width: column, height: 14, alignment: .leading)
@@ -187,7 +190,7 @@ struct SpeedWidget: Widget {
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 stableText(number).font(.system(size: expanded ? 20 : 23, weight: .semibold, design: .rounded))
-                    .foregroundStyle(IslandPalette.text)
+                    .foregroundStyle(unavailable == nil ? tint : IslandPalette.text)
                     .minimumScaleFactor(0.55)
                 stableText(unit).font(.system(size: expanded ? 9 : 10, weight: .medium))
                     .foregroundStyle(IslandPalette.secondary)
@@ -248,14 +251,14 @@ private struct RelayPill: View {
 }
 
 private enum IslandPalette {
-    static let text = rgb(0xfaf6ef)
-    static let secondary = rgb(0xc9c1b6)
+    static let text = rgb(0xffffff)
+    static let secondary = rgb(0xffffff)
     static let rule = Color.white.opacity(0.15)
-    static let down = rgb(0xb5d9c0)
-    static let up = rgb(0xefc99f)
-    static let lockBackground = rgb(0x141312)
-    static let buttonText = rgb(0xf3eadc)
-    static let buttonFill = rgb(0x2b2925)
+    static let down = rgb(0x76e7a2)
+    static let up = rgb(0x82ccff)
+    static let lockBackground = rgb(0x000000)
+    static let buttonText = rgb(0xffffff)
+    static let buttonFill = rgb(0x262626)
     static let pressedInk = rgb(0x33251a)
     static let pressedFill = rgb(0xeadbc8)
 

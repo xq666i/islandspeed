@@ -42,7 +42,7 @@ struct RelayIslandMainIntent: LiveActivityIntent {
 
 @available(iOS 17.0, *)
 struct ReserveOneIslandIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "重排预约"
+    static var title: LocalizedStringResource = "新增预约"
     static var description = IntentDescription("按当前网速活动的时间表补一个预约。")
     static var openAppWhenRun: Bool = false
     #if ISLANDSPEED_MAIN_TARGET_ROUTING
