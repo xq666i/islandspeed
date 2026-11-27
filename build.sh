@@ -42,8 +42,8 @@ for target in IslandSpeed IslandSpeedWidget; do
         *)
             [[ "$target" != IslandSpeed ]] || { echo 'ERROR: app-only flag missing in IslandSpeed' >&2; exit 1; } ;;
     esac
-    version=$(awk '$1 == "MARKETING_VERSION" && $2 == "=" {print $3; exit}')
-    build=$(awk '$1 == "CURRENT_PROJECT_VERSION" && $2 == "=" {print $3; exit}')
+    version=$(awk '$1 == "MARKETING_VERSION" && $2 == "=" {print $3; exit}' <<< "$resolved")
+    build=$(awk '$1 == "CURRENT_PROJECT_VERSION" && $2 == "=" {print $3; exit}' <<< "$resolved")
     echo "$target version: $version ($build)"
     [[ -n "$version" && -n "$build" ]] || { echo "ERROR: empty version for $target" >&2; exit 1; }
     if [[ "$target" == IslandSpeed ]]; then
