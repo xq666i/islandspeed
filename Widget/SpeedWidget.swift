@@ -120,30 +120,39 @@ struct SpeedWidget: Widget {
 
     private func compact(_ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?, minimal: Bool = false) -> some View {
         let p = RateText.parts(value)
+        let number = unavailable == nil ? p.0 : "—"
+        let unit = unavailable ?? p.1
         let column: CGFloat = minimal ? 27 : 38
         return HStack(spacing: 2) {
             Image(systemName: icon).font(.system(size: 9, weight: .bold)).foregroundStyle(tint)
                 .frame(width: 10, height: 12)
             VStack(alignment: .leading, spacing: 0) {
-                Text(unavailable == nil ? p.0 : "—")
+                Text(number)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
                     .frame(width: column, height: 14, alignment: .leading)
-                Text(unavailable ?? p.1).font(.system(size: 8, weight: .medium))
+                    .contentTransition(.identity).transition(.identity)
+                    .animation(nil, value: number)
+                Text(unit).font(.system(size: 8, weight: .medium))
                     .foregroundStyle(.secondary).minimumScaleFactor(0.65).lineLimit(1)
                     .frame(width: column, height: 10, alignment: .leading)
-            }.contentTransition(.identity)
+                    .contentTransition(.identity).transition(.identity)
+                    .animation(nil, value: unit)
+            }
         }.frame(width: column + 12, height: 24, alignment: .leading)
-            .foregroundStyle(.white).transaction { $0.animation = nil }
+            .foregroundStyle(.white).transition(.identity)
     }
 
     private func detailed(_ title: String, _ icon: String, _ value: Double, _ tint: Color, _ unavailable: String?, expanded: Bool = false) -> some View {
         let p = RateText.parts(value)
+        let reading = unavailable ?? "\(p.0) \(p.1)"
         return VStack(alignment: .leading, spacing: expanded ? 1 : 3) {
             Label(title, systemImage: icon).font(.system(size: expanded ? 11 : 12)).foregroundStyle(tint)
-            Text(unavailable ?? "\(p.0) \(p.1)").font(.system(size: expanded ? 17 : 21, weight: .semibold, design: .monospaced))
-                .minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white).contentTransition(.identity)
+            Text(reading).font(.system(size: expanded ? 17 : 21, weight: .semibold, design: .monospaced))
+                .minimumScaleFactor(0.6).lineLimit(1).foregroundStyle(.white)
                 .frame(width: expanded ? 100 : 108, height: expanded ? 20 : 26, alignment: .leading)
-        }.frame(width: expanded ? 100 : 108, alignment: .leading).transaction { $0.animation = nil }
+                .contentTransition(.identity).transition(.identity)
+                .animation(nil, value: reading)
+        }.frame(width: expanded ? 100 : 108, alignment: .leading).transition(.identity)
     }
 }
