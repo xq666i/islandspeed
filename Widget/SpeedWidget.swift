@@ -194,7 +194,7 @@ struct SpeedWidget: Widget {
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 stableText(number).font(.system(size: expanded ? 20 : 23, weight: .semibold, design: .rounded))
-                    .foregroundStyle(unavailable == nil ? tint : IslandPalette.text)
+                    .foregroundStyle(IslandPalette.text)
                     .minimumScaleFactor(0.55)
                 stableText(unit).font(.system(size: expanded ? 9 : 10, weight: .medium))
                     .foregroundStyle(IslandPalette.secondary)

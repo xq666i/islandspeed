@@ -29,7 +29,6 @@ import UIKit
         case location = "为什么用到定位？"
         case appointments = "灵动岛接力"
         case activity = "网速卡操作"
-        case stop = "停止监控？"
 
         var id: Self { self }
     }
@@ -42,9 +41,46 @@ import UIKit
     }
 
     var body: some View {
+        tabNavigation
+            .foregroundStyle(AppPalette.ink)
+            .background(AppPalette.paper.ignoresSafeArea())
+            .tint(AppPalette.coffee)
+            .sheet(item: $presentedSheet) { sheet in
+                sheetContent(sheet)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+            .onAppear { monitor.sceneChanged(scenePhase) }
+            .onChange(of: scenePhase) { phase in monitor.sceneChanged(phase) }
+            .onOpenURL { url in
+                guard RelayRecoveryLink.activityID(from: url) != nil else { return }
+                page = .monitor
+                presentedSheet = nil
+                monitor.openRelayRecovery(url)
+            }
+    }
+
+    @ViewBuilder private var tabNavigation: some View {
+        if #available(iOS 26.0, *) {
+            TabView(selection: $page) {
+                Tab("监控", systemImage: Page.monitor.symbol, value: Page.monitor) {
+                    pageContent(.monitor)
+                }
+                Tab("设置", systemImage: Page.settings.symbol, value: Page.settings) {
+                    pageContent(.settings)
+                }
+            }
+        } else {
+            pageContent(page)
+                .id(page)
+                .safeAreaInset(edge: .bottom, spacing: 0) { tabBar }
+        }
+    }
+
+    private func pageContent(_ selected: Page) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if page == .monitor {
+                if selected == .monitor {
                     header("灵动网速")
                     speedCard
                     locationCard
@@ -60,24 +96,7 @@ import UIKit
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
         }
-        .id(page)
-        .safeAreaInset(edge: .bottom, spacing: 0) { tabBar }
-        .foregroundStyle(AppPalette.ink)
         .background(AppPalette.paper.ignoresSafeArea())
-        .tint(AppPalette.coffee)
-        .sheet(item: $presentedSheet) { sheet in
-            sheetContent(sheet)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .onAppear { monitor.sceneChanged(scenePhase) }
-        .onChange(of: scenePhase) { phase in monitor.sceneChanged(phase) }
-        .onOpenURL { url in
-            guard RelayRecoveryLink.activityID(from: url) != nil else { return }
-            page = .monitor
-            presentedSheet = nil
-            monitor.openRelayRecovery(url)
-        }
     }
 
     private func header(_ title: String, subtitle: String? = nil) -> some View {
@@ -123,7 +142,7 @@ import UIKit
                 .font(.footnote).foregroundStyle(AppPalette.heroMuted)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
-                if monitor.running { presentedSheet = .stop }
+                if monitor.running { monitor.stop() }
                 else { Task { await monitor.start() } }
             } label: {
                 Text(monitor.running ? "停止监控" : "开始监控")
@@ -138,7 +157,7 @@ import UIKit
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(monitor.starting)
+            .disabled(monitor.starting && !monitor.running)
             if !monitor.running && monitor.status == "请在设置中允许实时活动" {
                 Button("打开系统设置", action: monitor.openSettings)
                     .font(.footnote.weight(.semibold))
@@ -222,14 +241,8 @@ import UIKit
                 note("同一张网速卡用久了，iOS 可能放慢刷新。开始监控后会预约最多 4 张新卡，到点自动接替，减少读数停更。")
             } else {
                 appointmentTimeline
-                if let next = monitor.appointmentDates.first {
-                    let start = next.addingTimeInterval(-Double(monitor.relayInterval))
-                    HStack(spacing: 6) {
-                        Text("下次接力")
-                        Text(timerInterval: start...next, countsDown: true, showsHours: false)
-                            .monospacedDigit().fontWeight(.semibold)
-                    }
-                    .font(.footnote).foregroundStyle(AppPalette.muted)
+                if let deadline = monitor.nextForegroundReplan, !monitor.foregroundRelayPaused {
+                    replanProgress(until: deadline)
                 }
                 note(queueExplanation)
             }
@@ -238,6 +251,26 @@ import UIKit
                     presentedSheet = monitor.relayEnabled ? .appointments : .activity
                 }
             }
+        }
+    }
+
+    private func replanProgress(until deadline: ContinuousClock.Instant) -> some View {
+        let total = RelaySchedule.foregroundReplanInterval / .seconds(1)
+        return TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            let remaining = max(0, min(total, ContinuousClock.now.duration(to: deadline) / .seconds(1)))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("下次重排")
+                    Spacer(minLength: 8)
+                    Text("\(Int(remaining.rounded(.up))) 秒")
+                        .monospacedDigit().fontWeight(.semibold)
+                }
+                .accessibilityElement(children: .combine)
+                ProgressView(value: total - remaining, total: total)
+                    .tint(AppPalette.sage)
+                    .accessibilityHidden(true)
+            }
+            .font(.footnote).foregroundStyle(AppPalette.muted)
         }
     }
 
@@ -306,12 +339,19 @@ import UIKit
                         .tint(AppPalette.sage)
                         .disabled(monitor.clearingAppointments)
                     note(monitor.clearingAppointments ? "正在解除已安排的接力。" : "提前排好最多 4 次，到点换新的网速卡。")
-                    if monitor.relayEnabled {
-                        Divider()
-                        intervalPicker("两次接力的间隔", selection: $monitor.relayInterval, options: RelaySchedule.intervalOptions)
-                            .disabled(monitor.running || monitor.starting)
+                    Divider()
+                    intervalPicker("两次接力的间隔",
+                                   selection: Binding(get: { monitor.relayInterval }, set: { monitor.setRelayInterval($0) }),
+                                   options: RelaySchedule.intervalOptions)
+                    if !monitor.relayEnabled {
+                        note("开启自动接力后使用所选间隔。")
+                    } else if monitor.foregroundRelayPaused {
+                        note("恢复接力后使用所选间隔。")
+                    } else if monitor.arrangingAppointments {
+                        note("正在安排预约，排好后可切出 App。")
+                    } else if monitor.running {
+                        note("调整后会按新间隔重排待启动的预约。")
                     }
-                    if monitor.running || monitor.starting { note("停止监控后可修改接力间隔。") }
                 } else {
                     note("预约接力需要 iOS 26 或更高版本。")
                 }
@@ -414,9 +454,6 @@ import UIKit
                     if monitor.renewStatus != "尚未重建" { note(monitor.renewStatus) }
                     sheetAction("立即重建网速卡", primary: true, action: monitor.renewNow)
                         .disabled(!monitor.running || monitor.editing)
-                case .stop:
-                    note("灵动岛网速卡将关闭，尚未开始的预约会一并取消。")
-                    sheetAction("停止监控", primary: true) { monitor.stop(); presentedSheet = nil }
                 }
             }
             .transaction { transaction in

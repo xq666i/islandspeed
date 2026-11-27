@@ -74,7 +74,7 @@ import UIKit
         return false
     }
     @Published private(set) var relayEnabled = SpeedMonitor.supportsReservations { didSet { savePreferences() } }
-    @Published var relayInterval = RelaySchedule.defaultInterval { didSet { savePreferences() } }
+    @Published private(set) var relayInterval = RelaySchedule.defaultInterval { didSet { savePreferences() } }
     @Published private(set) var relayStatus = "未预约"
     @Published private(set) var appointmentDates: [Date] = []
     var pendingCount: Int { appointmentDates.count }
@@ -85,7 +85,7 @@ import UIKit
     private var canScheduleReservations: Bool { relayEnabled && !foregroundRelayPaused && !clearingAppointments }
     private var reservationRevision = 0
     private var queueAnchor: Date?
-    private var nextForegroundReplan: ContinuousClock.Instant?
+    @Published private(set) var nextForegroundReplan: ContinuousClock.Instant?
     @Published private(set) var relayCount = 0
     @Published private(set) var observedCount = 0
     @Published private(set) var observedAt: Date?
@@ -839,6 +839,7 @@ import UIKit
         }
         do {
             try appendReservation(at: date, token: sessionID, request: request)
+            lastCheckDue = nil
             standaloneSuccesses += 1
             standaloneResult = "新增一个预约，剩余 \(pendingCount) 个"
             recordRelay(standaloneResult)
@@ -856,10 +857,12 @@ import UIKit
         guard let current = activity, running, canScheduleReservations, !editing, !Task.isCancelled,
               UIApplication.shared.applicationState == .active else { return }
         let token = sessionID
+        let revision = reservationRevision
         editing = true
         defer { if sessionID == token { editing = false; reconcile() } }
         _ = await editReservations(for: current, token: token)
-        if isCurrent(token, current.id), canScheduleReservations, reporting || recoveryActivityID == current.id {
+        if isCurrent(token, current.id), reservationRevision == revision, canScheduleReservations,
+           reporting || recoveryActivityID == current.id {
             reportForegroundRecovery(for: current)
         }
     }
@@ -877,6 +880,15 @@ import UIKit
         lastCheckDue = nil
         if enabled { scheduleRelay() }
         else { clearReservations() }
+    }
+
+    func setRelayInterval(_ seconds: Int) {
+        guard RelaySchedule.intervalOptions.contains(seconds), relayInterval != seconds else { return }
+        relayInterval = seconds
+        guard running, canScheduleReservations else { return }
+        // Discard any appointment plan suspended while freeing a slot.
+        reservationRevision += 1
+        scheduleRelay()
     }
 
     func cancelRelay() {
@@ -915,12 +927,15 @@ import UIKit
 
     private func schedulePeriodicReplan(at now: ContinuousClock.Instant) {
         guard sceneIsActive, UIApplication.shared.applicationState == .active, canScheduleReservations else { return }
+        guard activity.map(isLive) == true else {
+            if nextForegroundReplan != nil { nextForegroundReplan = nil }
+            return
+        }
         guard let due = nextForegroundReplan else {
             nextForegroundReplan = now.advanced(by: RelaySchedule.foregroundReplanInterval)
             return
         }
-        guard now >= due, !arrangingAppointments, foregroundWork == nil,
-              activity.map(isLive) == true else { return }
+        guard now >= due, !arrangingAppointments, foregroundWork == nil else { return }
         nextForegroundReplan = now.advanced(by: RelaySchedule.foregroundReplanInterval)
         foregroundMaintenance = .replan
         startForegroundWorkIfNeeded()
@@ -1011,11 +1026,16 @@ import UIKit
                 await resetInForeground()
                 if foregroundRecoveryRequest == request { foregroundRecoveryRequest = nil }
             } else if let id = foregroundRecoveryRequest {
+                if maintenance == .replan { foregroundMaintenance = .replan }
                 await recoverQueueFromLink(activityID: id)
                 if foregroundRecoveryRequest == id { foregroundRecoveryRequest = nil }
             } else {
                 if maintenance == .replan {
                     guard canScheduleReservations else { continue }
+                    if activity.map(isLive) != true {
+                        await resetInForeground()
+                        continue
+                    }
                     queueAnchor = Date()
                     retiringAppointments = Set(pendingAppointments.map(\.id))
                 }
