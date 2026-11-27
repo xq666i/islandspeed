@@ -15,6 +15,7 @@ struct SpeedAttributes: ActivityAttributes {
     }
     var sessionID: UUID? = nil
     var startedAt: Date
+    var buildIdentifier: String? = nil
 }
 
 enum RelayRecoveryLink {

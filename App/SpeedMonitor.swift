@@ -6,6 +6,13 @@ import UIKit
 
 @MainActor final class SpeedMonitor: ObservableObject {
     static let samplesPerSecond = 4
+    static let installedVersion: (version: String, build: String)? = {
+        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+              !version.isEmpty, !build.isEmpty else { return nil }
+        return (version, build)
+    }()
+    private static let buildIdentifier = installedVersion.map { "\($0.version)/\($0.build)" }
     @Published private(set) var down: Double = 0
     @Published private(set) var up: Double = 0
     @Published private(set) var running = false
@@ -97,6 +104,10 @@ import UIKit
     private var activity: Island?
     private var stagingManualActivity: Island?
     var currentActivityID: String { activity?.id ?? "无" }
+    private var needsUpgradeRefresh: Bool {
+        guard let activity, let build = Self.buildIdentifier else { return false }
+        return activity.attributes.buildIdentifier != build
+    }
     @Published var useLocation = true {
         didSet {
             if !applyingPreferences { refreshLocation() }
@@ -318,7 +329,8 @@ import UIKit
                                                    alignedRelays: relayEnabled ? 0 : nil)
         let new: Island
         do {
-            new = try Island.request(attributes: .init(sessionID: sessionID, startedAt: date),
+            new = try Island.request(attributes: .init(sessionID: sessionID, startedAt: date,
+                                                      buildIdentifier: Self.buildIdentifier),
                 content: snapshot(initial), pushType: nil)
         } catch { status = "实时活动启动失败：\(error.localizedDescription)"; return }
         down = 0; up = 0; sampleCount = 0; submitCount = 0
@@ -695,7 +707,7 @@ import UIKit
         func create() throws -> (Island, SpeedAttributes.ContentState) {
             let anchor = Date()
             let state = readState(pending: pendingAppointments, anchor: anchor, total: renewCount + relayCount + 1)
-            let attrs = SpeedAttributes(sessionID: token, startedAt: anchor)
+            let attrs = SpeedAttributes(sessionID: token, startedAt: anchor, buildIdentifier: Self.buildIdentifier)
             if let request {
                 // With equal scores the system prefers the older card. Leave room
                 // above the regular score for a newly requested manual replacement.
@@ -757,7 +769,7 @@ import UIKit
 
     @available(iOS 26.0, *)
     private func appendReservation(at date: Date, token: UUID, request: ReservationRequest? = nil) throws {
-        let attributes = SpeedAttributes(sessionID: token, startedAt: date)
+        let attributes = SpeedAttributes(sessionID: token, startedAt: date, buildIdentifier: Self.buildIdentifier)
         let blank = SpeedAttributes.ContentState(down: 0, up: 0, sampledAt: date, sampleNumber: 0, alignedRelays: 0)
         let content = snapshot(blank)
         let alert = AlertConfiguration(title: "灵动网速", body: "预约的网速活动已启动", sound: .default)
@@ -993,7 +1005,7 @@ import UIKit
             backgroundReport = "离开 \(elapsed) 秒：新增 \(sampleCount - baseline.samples) 个样本，\(submitCount - baseline.submits) 次更新调用返回"
             self.baseline = nil
         }
-        if running && (returned || restored) {
+        if running && (returned || restored || (needsUpgradeRefresh && foregroundWork == nil)) {
             if !relayEnabled && !pendingAppointments.isEmpty && !clearingAppointments { clearReservations() }
             if !foregroundRelayPaused { foregroundMaintenance = .reset }
         }
@@ -1047,9 +1059,10 @@ import UIKit
     private func resetInForeground() async {
         refreshLocation()
         guard running else { return }
+        let upgrading = needsUpgradeRefresh
         if !relayEnabled {
-            if activity?.activityState == .stale || latestUpdateIsStalled {
-                _ = await renew(source: "前台恢复", request: nil)
+            if upgrading || activity?.activityState == .stale || latestUpdateIsStalled {
+                _ = await renew(source: upgrading ? "版本升级" : "前台恢复", request: nil)
             }
             return
         }
@@ -1058,12 +1071,13 @@ import UIKit
         queueAnchor = nil
         retiringAppointments = Set(pendingAppointments.map(\.id))
         foregroundRecoveryStatus = "正在重排全部预约…"
-        if let current = activity,
+        if !upgrading, let current = activity,
            Date().timeIntervalSince(current.attributes.startedAt) < Double(Self.renewalCooldownSeconds) {
             await replanInForeground(reporting: true)
             return
         }
-        let renewed = await renew(source: "回前台重排", request: nil, recoveringQueue: true, resettingQueue: true)
+        let renewed = await renew(source: upgrading ? "版本升级" : "回前台重排", request: nil,
+                                  recoveringQueue: true, resettingQueue: true)
         guard running, sessionID == token, canScheduleReservations else { return }
         if renewed, let activity {
             reportForegroundRecovery(for: activity)

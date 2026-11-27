@@ -363,6 +363,10 @@ import UIKit
                 Divider()
                 rowButton("定位权限 · \(locationLabel)") { presentedSheet = .location }
             }
+            if let version = SpeedMonitor.installedVersion {
+                note("版本 \(version.version)（构建 \(version.build)）")
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
     }
 
