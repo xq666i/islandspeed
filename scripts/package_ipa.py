@@ -22,6 +22,18 @@ def package(app: Path, output: Path) -> None:
     for key in ('NSLocationWhenInUseUsageDescription', 'NSLocationAlwaysAndWhenInUseUsageDescription', 'NSSupportsLiveActivities'):
         if not info.get(key):
             raise ValueError(f'缺少 Info.plist 配置：{key}')
+    with (app / widget / 'Info.plist').open('rb') as stream:
+        extension = plistlib.load(stream)
+    if extension.get('NSExtension', {}).get('NSExtensionPointIdentifier') != 'com.apple.widgetkit-extension':
+        raise ValueError('扩展缺少 WidgetKit 入口')
+    main_id = info.get('CFBundleIdentifier', '')
+    if not main_id or not extension.get('CFBundleIdentifier', '').startswith(main_id + '.'):
+        raise ValueError('扩展包名与主 App 包名不匹配')
+    for key in ('CFBundleShortVersionString', 'CFBundleVersion'):
+        if not info.get(key) or info[key] != extension.get(key):
+            raise ValueError(f'主 App 与扩展版本不匹配：{key}')
+    if info.get('CFBundleExecutable') != 'IslandSpeed' or extension.get('CFBundleExecutable') != 'IslandSpeedWidget':
+        raise ValueError('Info.plist 中的可执行文件名与构建产物不匹配')
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent) as temporary:

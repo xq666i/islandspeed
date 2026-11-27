@@ -26,8 +26,6 @@
 	<string>用于用户主动开启的后台网速监控实验。不保存或上传位置。</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
-	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
-	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

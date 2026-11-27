@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#endif
 
 // Read physical-interface counters only: avoid double counting VPN tunnel traffic.
 // 32-bit interface counters may wrap; compute each interface independently.
@@ -8,6 +10,7 @@ struct NetworkMeter {
     private var previous: [String: Count] = [:]
     private var last: ContinuousClock.Instant?
 
+    #if canImport(Darwin)
     static func counters() -> [String: Count]? {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let first = head else { return nil }
@@ -29,11 +32,20 @@ struct NetworkMeter {
         return output
     }
 
-    mutating func sample() -> (down: Double, up: Double)? {
+    mutating func sample() -> Interval? {
         sample(Self.counters(), at: .now)
     }
 
-    mutating func sample(_ counters: [String: Count]?, at time: ContinuousClock.Instant) -> (down: Double, up: Double)? {
+    #endif
+
+    struct Interval {
+        let start: ContinuousClock.Instant
+        let end: ContinuousClock.Instant
+        let received: UInt64
+        let sent: UInt64
+    }
+
+    mutating func sample(_ counters: [String: Count]?, at time: ContinuousClock.Instant) -> Interval? {
         guard let counters, !counters.isEmpty else {
             last = nil
             previous.removeAll()
@@ -42,9 +54,7 @@ struct NetworkMeter {
         defer { previous = counters; last = time }
         guard let last else { return nil }
         let interval = last.duration(to: time)
-        guard interval > .zero, interval < .seconds(5) else { return nil }
-        let parts = interval.components
-        let elapsed = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+        guard interval > .zero, interval <= .seconds(2) else { return nil }
         var received: UInt64 = 0
         var sent: UInt64 = 0
         var measured = false
@@ -52,13 +62,38 @@ struct NetworkMeter {
             guard let old = previous[name] else { continue }
             let rx = UInt64(current.rx &- old.rx)
             let tx = UInt64(current.tx &- old.tx)
-            // Preserve the original wrap guard. A reset or a new interface needs a new baseline.
-            guard Double(rx) / elapsed < 500_000_000, Double(tx) / elapsed < 500_000_000 else { continue }
+            // Only a backwards counter needs a wrap plausibility check. Do not
+            // discard fast, monotonically increasing counters on modern links.
+            let wrapLimit = interval / .seconds(1) * 1_250_000_000
+            guard (current.rx >= old.rx || Double(rx) <= wrapLimit),
+                  (current.tx >= old.tx || Double(tx) <= wrapLimit) else { continue }
             received += rx
             sent += tx
             measured = true
         }
         guard measured else { return nil }
-        return (Double(received) / elapsed, Double(sent) / elapsed)
+        return Interval(start: last, end: time, received: received, sent: sent)
+    }
+}
+
+// Average the bytes carried in the last second. A sample crossing the window
+// boundary contributes only the fraction of its interval inside the window.
+struct RateWindow {
+    private var intervals: [NetworkMeter.Interval] = []
+
+    mutating func append(_ sample: NetworkMeter.Interval) -> (down: Double, up: Double) {
+        if let previous = intervals.last, previous.end != sample.start { intervals.removeAll() }
+        let cutoff = sample.end.advanced(by: .seconds(-1))
+        intervals.removeAll { $0.end <= cutoff }
+        intervals.append(sample)
+        var received = 0.0, sent = 0.0
+        for item in intervals {
+            let covered = max(cutoff, item.start).duration(to: item.end)
+            let fraction = covered / item.start.duration(to: item.end)
+            received += Double(item.received) * fraction
+            sent += Double(item.sent) * fraction
+        }
+        let elapsed = max(cutoff, intervals[0].start).duration(to: sample.end) / .seconds(1)
+        return (received / elapsed, sent / elapsed)
     }
 }

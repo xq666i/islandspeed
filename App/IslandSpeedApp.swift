@@ -7,7 +7,6 @@ import Foundation
 }
 struct ContentView: View {
     @ObservedObject var monitor: SpeedMonitor
-    @State private var busy = false
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         NavigationStack {
@@ -29,15 +28,13 @@ struct ContentView: View {
                         Text(monitor.permissionHint).font(.footnote).foregroundStyle(.secondary)
                     }
                     Button {
-                        busy = true
                         Task {
                             if monitor.running { monitor.stop() } else { await monitor.start() }
-                            busy = false
                         }
                     } label: {
                         Text(monitor.running ? "停止灵动岛网速" : "开启灵动岛网速")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }.buttonStyle(.borderedProminent).disabled(busy)
+                    }.buttonStyle(.borderedProminent).disabled(monitor.starting)
                     }
                     VStack(alignment: .leading, spacing: 14) {
                         Text("灵动岛刷新设置").font(.headline)
@@ -46,7 +43,7 @@ struct ContentView: View {
                                 ForEach([1, 2, 3, 5, 10, 15], id: \.self) { Text("\($0) 秒").tag($0) }
                             }.labelsHidden().pickerStyle(.menu)
                         }
-                        Text("仅在实际显示值变化时提交；不足 500 KB/s 保留原精度，高 KB/s 和 MB/s 自动防抖。返回前台时当前活动满 60 秒自动接力。")
+                        Text("读数变化时按选定间隔提交。回到前台会补齐预约。读数过期、提交卡住，或预约耗尽又错过一次接力时，会重建当前活动。")
                             .font(.footnote).foregroundStyle(.secondary)
                         if monitor.running {
                             Button("立即重建灵动岛（不停止采样）") { monitor.renewNow() }.buttonStyle(.bordered)
@@ -54,14 +51,18 @@ struct ContentView: View {
                         Text(monitor.status).font(.subheadline)
                         Divider()
                         Text("自动接力").font(.headline)
-                        Toggle("预定活动接力", isOn: $monitor.relayEnabled).disabled(monitor.running)
+                        if SpeedMonitor.supportsReservations {
+                            Toggle("预定活动接力", isOn: $monitor.relayEnabled).disabled(monitor.running || monitor.starting)
+                        } else {
+                            Text("预约接力需要 iOS 26 或更高版本。").font(.footnote)
+                        }
                         if monitor.relayEnabled {
                             setting("接力间隔") {
                                 Picker("接力间隔", selection: $monitor.relayInterval) {
                                     ForEach([60, 90, 120, 180, 300], id: \.self) { Text("\($0) 秒").tag($0) }
                                 }.labelsHidden().pickerStyle(.menu).disabled(monitor.running)
                             }
-                            Text("默认预约4次（实测上限），系统可能提前拒绝。到时启动可能有提示音或短暂双活动。点击立即接力会创建新活动；满额时先释放最远预约，保留其余预约。长按展开后每点一次「重排预约」更新一个时间；返回 App 自动重排。")
+                            Text("最多预留 4 个预约，实际可用数量由系统决定。到时启动可能有提示音或短暂双活动。点击立即接力会创建新活动；满额时先释放最远预约，保留其余预约。长按展开后每点一次「重排预约」更新一个时间；返回 App 自动重排。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             if monitor.running {
                                 Button("重排预约（前台）") { monitor.scheduleRelay() }.buttonStyle(.bordered)
@@ -87,7 +88,6 @@ struct ContentView: View {
                         Text("执行阶段：\(monitor.buttonStage)")
                         Text("当前活动 ID：\(monitor.currentActivityID)").textSelection(.enabled)
                         Text("Intent 路由：\(monitor.intentRoutingMode)")
-                        Text("扩展侧 Intent 信号：\(monitor.buttonFallbackSignals) 次（转发尝试，非授权路径）")
                         Text(monitor.buttonResult)
                         Button("复制诊断（含事件记录）") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                         DisclosureGroup("接力事件记录（最近 \(monitor.relayEvents.count) 条）") {
@@ -123,10 +123,11 @@ struct ContentView: View {
                         Text(monitor.backgroundReport)
                         Button("复制诊断") { monitor.copyDiagnostics() }.buttonStyle(.bordered)
                     }.font(.footnote).monospacedDigit()
-                    Text("每 0.25 秒采样，最近 4 个有效样本平均。仅在实际显示值变化时按选定最短间隔提交；不发相同读数心跳。更新调用返回不等于系统已渲染。长按网速卡可查看样本编号。")
+                    Text("每 0.25 秒采样，按最近一秒的流量计算网速。网速稳定时约每分钟确认一次。若最新数据超过 90 秒，网速卡会标记过期。更新调用返回后，实际显示时间由系统决定。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(20)
             }.navigationTitle("灵动网速")
+                .onAppear { monitor.sceneChanged(scenePhase) }
                 .onChange(of: scenePhase) { phase in monitor.sceneChanged(phase) }
         }
     }
@@ -138,7 +139,7 @@ struct ContentView: View {
         let p = RateText.parts(value)
         return VStack(alignment: .leading, spacing: 8) {
             Label(title, systemImage: icon).foregroundStyle(color)
-            Text(p.0).font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit().minimumScaleFactor(0.5).lineLimit(1)
+            Text(monitor.hasRecentReading ? p.0 : "—").font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit().minimumScaleFactor(0.5).lineLimit(1)
             Text(p.1).font(.caption).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }

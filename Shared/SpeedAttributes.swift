@@ -11,7 +11,9 @@ struct SpeedAttributes: ActivityAttributes {
         var totalRelays: Int? = nil
         var nextRelay: Date? = nil
         var alignedRelays: Int? = nil
+        var lostSample: Bool? = nil
     }
+    var sessionID: UUID? = nil
     var startedAt: Date
 }
 

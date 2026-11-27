@@ -29,7 +29,7 @@ struct SpeedWidget: Widget {
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
-                            Text("更新 " + context.state.sampledAt.formatted(.dateTime.hour().minute().second()))
+                            Text(context.state.sampleNumber == 0 ? "暂无有效读数" : "读数 " + context.state.sampledAt.formatted(.dateTime.hour().minute().second()))
                             Spacer(minLength: 4)
                             Text("运行")
                             Text(context.attributes.startedAt, style: .timer).monospacedDigit()
@@ -53,12 +53,14 @@ struct SpeedWidget: Widget {
                                 .lineLimit(1).minimumScaleFactor(0.75)
                             Spacer(minLength: 4)
                             if #available(iOS 17.0, *) {
-                                Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
-                                    Text("重排预约").font(.system(size: 11, weight: .semibold))
-                                        .lineLimit(1).foregroundStyle(.white)
-                                        .padding(.horizontal, 6).frame(height: 28)
-                                        .background(.white.opacity(0.17), in: Capsule())
-                                }.buttonStyle(.plain)
+                                if #available(iOS 26.0, *), context.state.alignedRelays != nil {
+                                    Button(intent: ReserveOneIslandIntent(activityID: context.activityID)) {
+                                        Text("重排预约").font(.system(size: 11, weight: .semibold))
+                                            .lineLimit(1).foregroundStyle(.white)
+                                            .padding(.horizontal, 6).frame(height: 28)
+                                            .background(.white.opacity(0.17), in: Capsule())
+                                    }.buttonStyle(.plain)
+                                }
                                 Button(intent: RelayIslandMainIntent(activityID: context.activityID)) {
                                     Text("立即接力")
                                         .font(.system(size: 11, weight: .semibold))
@@ -81,7 +83,7 @@ struct SpeedWidget: Widget {
     }
 
     private func unavailable(_ context: ActivityViewContext<SpeedAttributes>) -> String? {
-        if context.state.sampleNumber == 0 { return "待采样" }
+        if context.state.sampleNumber == 0 { return context.state.lostSample == true ? "无样本" : "待采样" }
         return context.isStale ? "过期" : nil
     }
 
@@ -89,11 +91,12 @@ struct SpeedWidget: Widget {
         let state = context.state
         let stamp = state.sampledAt.formatted(.dateTime.hour().minute().second())
         let label = state.sampleNumber.map { "样本 #\($0)" } ?? "采样"
-        let note = state.sampleNumber == 0 ? "等待首个有效样本" : "\(context.isStale ? "上次" : "")\(label) · \(stamp)"
+        let noReading = state.lostSample == true ? "网卡暂无有效样本 · 上次 " + stamp : "等待首个有效样本"
+        let note = state.sampleNumber == 0 ? noReading : "\(context.isStale ? "上次" : "")\(label) · \(stamp)"
         return VStack(alignment: .leading, spacing: 2) {
             Text(note).contentTransition(.identity)
             HStack(spacing: 4) {
-                Text("系统计时对照")
+                Text("本次活动")
                 Text(context.attributes.startedAt, style: .timer).monospacedDigit()
             }
             HStack(spacing: 6) {

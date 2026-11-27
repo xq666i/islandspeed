@@ -1,36 +1,31 @@
 import Foundation
 
-// Use an absolute anchor so cleanup latency never shifts the next appointment.
-// If cleanup takes more than an interval, skip elapsed slots rather than asking
-// ActivityKit to create an appointment in the past.
 enum RelaySchedule {
-    static func dates(anchor: Date, interval: Int, count: Int, now: Date,
-                      preserving: [Date] = []) -> [Date] {
-        guard count > 0 else { return [] }
+    static let capacity = 4
+
+    // The grid belongs to the active activity, even after a delayed wake.
+    static func dates(anchor: Date, interval: Int, now: Date) -> [Date] {
         let step = Double(max(1, interval))
-        var result = Array(Set(preserving.filter { $0 > now })).sorted()
-        if result.count >= count { return Array(result.prefix(count)) }
-        var next: Date
-        if let last = result.last {
-            next = last.addingTimeInterval(step)
-        } else {
-            let elapsed = max(0, now.timeIntervalSince(anchor))
-            let firstSlot = floor(elapsed / step) + 1
-            next = anchor.addingTimeInterval(firstSlot * step)
-        }
-        while result.count < count {
-            result.append(next)
-            next = next.addingTimeInterval(step)
-        }
-        return result
+        let first = floor(max(0, now.timeIntervalSince(anchor)) / step) + 1
+        return (0..<capacity).map { anchor.addingTimeInterval((first + Double($0)) * step) }
     }
-    // Return a single missing target and, only at capacity, the farthest
-    // obsolete pending date. A caller must verify cancellation before creating.
-    static func nextReplacement(desired: [Date], existing: [Date], capacity: Int) -> (date: Date, release: Date?)? {
-        let wanted = Set(desired)
-        let current = Set(existing)
-        guard let date = desired.first(where: { !current.contains($0) }) else { return nil }
-        let release = existing.count >= capacity ? existing.filter { !wanted.contains($0) }.max() : nil
-        return (date, release)
+
+    // ActivityKit may round dates when storing an activity across launches.
+    static func matches(_ lhs: Date, _ rhs: Date) -> Bool {
+        abs(lhs.timeIntervalSince(rhs)) < 0.5
+    }
+
+    static func plan(desired: [Date], existing: [Date], available: Int = capacity) -> (matched: Int, next: Date?, release: Date?) {
+        var unmatched = existing
+        var missing: [Date] = []
+        for date in desired {
+            if let index = unmatched.firstIndex(where: { matches($0, date) }) {
+                unmatched.remove(at: index)
+            } else {
+                missing.append(date)
+            }
+        }
+        return (desired.count - missing.count, missing.first,
+                existing.count >= available ? unmatched.max() : nil)
     }
 }

@@ -21,11 +21,16 @@ has_routing_sdk || { echo 'ERROR: iOS 27 SDK required. Refusing to create a lega
 echo 'Intent routing: REQUIRED explicit iOS 27 main target'
 xcodebuild -version
 xcrun --sdk iphoneos --show-sdk-version
+test_dir=$(mktemp -d)
+trap 'rm -rf "$test_dir"' EXIT
+xcrun --sdk macosx swiftc -target "$(uname -m)-apple-macosx13.0" \
+    App/NetworkMeter.swift App/RelaySchedule.swift Tests/CoreTests.swift -o "$test_dir/core-tests"
+"$test_dir/core-tests"
 xcodegen generate
 # Verify explicit target-level flags and version after regenerating the project.
 for target in IslandSpeed IslandSpeedWidget; do
     resolved=$(xcodebuild -project IslandSpeed.xcodeproj -target "$target" -configuration Release -sdk iphoneos -showBuildSettings)
-    flags=$(printf '%s\n' "$resolved" | awk '$1 == "SWIFT_ACTIVE_COMPILATION_CONDITIONS" && $2 == "=" { $1=""; $2=""; print; exit }')
+    flags=$(awk '$1 == "SWIFT_ACTIVE_COMPILATION_CONDITIONS" && $2 == "=" { $1=""; $2=""; print; exit }' <<< "$resolved")
     echo "$target SWIFT_ACTIVE_COMPILATION_CONDITIONS =$flags"
     case " $flags " in
         *" ISLANDSPEED_MAIN_TARGET_ROUTING "*) ;;
@@ -37,10 +42,15 @@ for target in IslandSpeed IslandSpeedWidget; do
         *)
             [[ "$target" != IslandSpeed ]] || { echo 'ERROR: app-only flag missing in IslandSpeed' >&2; exit 1; } ;;
     esac
-    version=$(printf '%s\n' "$resolved" | awk '$1 == "MARKETING_VERSION" && $2 == "=" {print $3; exit}')
-    build=$(printf '%s\n' "$resolved" | awk '$1 == "CURRENT_PROJECT_VERSION" && $2 == "=" {print $3; exit}')
+    version=$(awk '$1 == "MARKETING_VERSION" && $2 == "=" {print $3; exit}')
+    build=$(awk '$1 == "CURRENT_PROJECT_VERSION" && $2 == "=" {print $3; exit}')
     echo "$target version: $version ($build)"
-    [[ "$version" == 1.2.1 && "$build" == 15 ]] || { echo 'ERROR: unexpected project version; replace project.yml' >&2; exit 1; }
+    [[ -n "$version" && -n "$build" ]] || { echo "ERROR: empty version for $target" >&2; exit 1; }
+    if [[ "$target" == IslandSpeed ]]; then
+        app_version="$version"; app_build="$build"
+    elif [[ "$version" != "$app_version" || "$build" != "$app_build" ]]; then
+        echo "ERROR: Widget and main app versions differ" >&2; exit 1
+    fi
 done
 xcodebuild -project IslandSpeed.xcodeproj -scheme IslandSpeed -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
 app=build/Build/Products/Release-iphoneos/IslandSpeed.app
